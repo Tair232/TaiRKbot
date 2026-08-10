@@ -17,6 +17,7 @@ const state = {
   lyricMap: [],
   pollTimer: null,
   visualTimer: null,
+  activeLyricIndex: -999,
 };
 
 const popular = [
@@ -86,6 +87,13 @@ function parseSyncedLyrics(source = "") {
     .sort((a, b) => a.timeMs - b.timeMs);
 }
 
+function plainLyricsLines(source = "") {
+  return String(source)
+    .split("\n")
+    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
+    .filter(Boolean);
+}
+
 function statusMessage(text, type = "info") {
   const el = document.querySelector("#status");
   if (!el) return;
@@ -117,6 +125,10 @@ function errorMessage(code) {
 }
 
 function render() {
+  if (state.mode === "result" && state.selected) {
+    renderResult();
+    return;
+  }
   if (state.mode === "karaoke" && state.selected) {
     renderKaraoke();
     return;
@@ -241,7 +253,7 @@ function selectedCard(track) {
     <button id="startKaraoke" class="sing-button ready">
       <span>▶</span>
       НАЧАТЬ ПЕТЬ
-      <small>${track.hasSyncedLyrics ? "синхронный текст готов" : "музыка запустится, но тайминг текста может отсутствовать"}</small>
+      <small>${track.hasSyncedLyrics ? "синхронный текст готов" : track.hasLyrics ? "обычный текст — листай вручную во время песни" : "для этой версии текста нет"}</small>
     </button>
   `;
 }
@@ -369,6 +381,7 @@ async function startSelectedKaraoke() {
 
     state.connectedChannel = data.channelName || state.connectedChannel;
     state.lyricMap = parseSyncedLyrics(state.selected.syncedLyrics);
+    state.activeLyricIndex = -999;
     state.karaoke = {
       ...data,
       positionMs: Number(data.positionMs) || 0,
@@ -382,6 +395,40 @@ async function startSelectedKaraoke() {
     render();
     statusMessage(errorMessage(error.message), "error");
   }
+}
+
+function syncedLyricsMarkup() {
+  if (!state.lyricMap.length) return "";
+  return `
+    <div id="lyricsViewport" class="lyrics-viewport">
+      <div id="lyricsRail" class="lyrics-rail">
+        ${state.lyricMap.map((line, index) => `
+          <div class="rolling-lyric" data-lyric-index="${index}">${escapeHtml(line.text)}</div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function manualLyricsMarkup() {
+  const lines = plainLyricsLines(state.selected?.plainLyrics);
+  if (!lines.length) {
+    return `
+      <div class="manual-lyrics empty-manual">
+        <strong>Текста для этой версии нет</strong>
+        <span>Музыка всё равно продолжит играть.</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="manual-lyrics-wrap">
+      <div class="manual-hint">БЕЗ СИНХРОНИЗАЦИИ · ЛИСТАЙ ТЕКСТ САМ</div>
+      <div id="manualLyrics" class="manual-lyrics" tabindex="0">
+        ${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderKaraoke() {
@@ -402,16 +449,34 @@ function renderKaraoke() {
 
       <section class="karaoke-stage">
         <div class="stage-glow"></div>
+        <div id="countdownOverlay" class="countdown-overlay hidden">
+          <span>ПРИГОТОВЬСЯ</span>
+          <strong id="countdownNumber">3</strong>
+        </div>
+
         <div class="stage-meta">
           <div class="eyebrow">СЕЙЧАС ИГРАЕТ</div>
           <h1>${escapeHtml(track.title)}</h1>
           <p>${escapeHtml(track.artist)}</p>
         </div>
 
-        <div class="lyrics-stage ${state.lyricMap.length ? "" : "no-sync"}">
-          <div id="lyricPrev" class="stage-lyric previous">${state.lyricMap.length ? "…" : "Синхронного текста для этой версии нет"}</div>
-          <div id="lyricCurrent" class="stage-lyric current">${state.lyricMap.length ? "♪" : "Музыка всё равно играет"}</div>
-          <div id="lyricNext" class="stage-lyric next">${state.lyricMap.length ? "…" : "Выбери другую версию трека, если нужен тайминг"}</div>
+        <div class="lyrics-stage ${state.lyricMap.length ? "synced" : "no-sync"}">
+          ${state.lyricMap.length ? syncedLyricsMarkup() : manualLyricsMarkup()}
+        </div>
+
+        <div class="live-score-row">
+          <div class="live-score-card">
+            <span>НОТЫ</span>
+            <strong id="liveAccuracy">—%</strong>
+          </div>
+          <div class="live-score-card verdict-card">
+            <span id="liveVerdictLabel">СЛУШАЕМ ТЕБЯ</span>
+            <strong id="liveVerdict">♪</strong>
+          </div>
+          <div class="live-score-card">
+            <span>КОМБО</span>
+            <strong id="liveCombo">×0</strong>
+          </div>
         </div>
 
         <div class="player-block">
@@ -437,7 +502,7 @@ function renderKaraoke() {
   document.querySelector("#pauseResume")?.addEventListener("click", togglePause);
   document.querySelector("#stopKaraoke")?.addEventListener("click", stopCurrentKaraoke);
   document.querySelector("#backLibrary")?.addEventListener("click", async () => {
-    if (["playing", "paused", "buffering", "resolving"].includes(state.karaoke?.status)) {
+    if (["playing", "paused", "buffering", "resolving", "countdown"].includes(state.karaoke?.status)) {
       await stopCurrentKaraoke();
       return;
     }
@@ -447,6 +512,75 @@ function renderKaraoke() {
   });
 
   updateKaraokeVisuals();
+}
+
+function renderResult() {
+  const result = state.karaoke?.score?.result;
+  const track = state.selected;
+  const available = Boolean(result?.available);
+
+  app.innerHTML = `
+    <main class="result-shell">
+      <section class="result-card">
+        <div class="result-eyebrow">РЕЗУЛЬТАТ</div>
+        <h1>${escapeHtml(track.title)}</h1>
+        <p class="result-artist">${escapeHtml(track.artist)}</p>
+
+        ${available ? `
+          <div class="grade-orb">${escapeHtml(result.grade)}</div>
+          <div class="big-result-score">${Number(result.points || 0).toLocaleString("ru-RU")}</div>
+          <div class="result-caption">ОЧКОВ · ОЦЕНКА НОТ BETA</div>
+
+          <div class="result-bars">
+            ${resultBar("Попадание в ноты", result.pitch)}
+            ${resultBar("Тайминг", result.timing)}
+            ${resultBar("Стабильность", result.stability)}
+            ${resultBar("Участие", result.participation)}
+          </div>
+
+          <div class="hit-grid">
+            <div><strong>${result.perfect}</strong><span>PERFECT</span></div>
+            <div><strong>${result.great}</strong><span>GREAT</span></div>
+            <div><strong>${result.good}</strong><span>GOOD</span></div>
+            <div><strong>${result.miss}</strong><span>MISS</span></div>
+          </div>
+          <div class="max-combo">🔥 Максимальное комбо: <strong>×${result.maxCombo}</strong></div>
+          <p class="beta-note">Пока это beta-оценка: эталон нот строится автоматически из оригинальной записи. В наушниках результат будет заметно точнее.</p>
+        ` : `
+          <div class="no-score">
+            <div class="no-score-icon">♪</div>
+            <h2>Не хватило голоса для оценки</h2>
+            <p>Нужно спеть чуть дольше, чтобы бот успел сравнить ноты.</p>
+          </div>
+        `}
+
+        <div class="result-actions">
+          <button id="singAgain" class="primary result-button">↻ Спеть ещё раз</button>
+          <button id="resultLibrary" class="secondary result-button">Каталог</button>
+        </div>
+      </section>
+    </main>
+  `;
+
+  document.querySelector("#singAgain")?.addEventListener("click", () => {
+    state.mode = "library";
+    render();
+    document.querySelector("#startKaraoke")?.click();
+  });
+  document.querySelector("#resultLibrary")?.addEventListener("click", () => {
+    state.mode = "library";
+    render();
+  });
+}
+
+function resultBar(label, value) {
+  const safe = Math.max(0, Math.min(100, Number(value) || 0));
+  return `
+    <div class="result-bar-row">
+      <div><span>${escapeHtml(label)}</span><strong>${Math.round(safe)}%</strong></div>
+      <div class="result-bar-track"><i style="width:${safe}%"></i></div>
+    </div>
+  `;
 }
 
 function estimatedPositionMs() {
@@ -475,6 +609,27 @@ function activeLyricIndex(positionMs) {
   return answer;
 }
 
+function updateRollingLyrics(positionMs) {
+  if (!state.lyricMap.length) return;
+  const index = activeLyricIndex(positionMs);
+  if (index === state.activeLyricIndex) return;
+  state.activeLyricIndex = index;
+
+  document.querySelectorAll(".rolling-lyric").forEach((line) => {
+    const lineIndex = Number(line.dataset.lyricIndex);
+    line.classList.toggle("active", lineIndex === index);
+    line.classList.toggle("passed", lineIndex < index);
+    line.classList.toggle("upcoming", lineIndex > index);
+  });
+
+  const viewport = document.querySelector("#lyricsViewport");
+  const active = document.querySelector(`[data-lyric-index="${Math.max(0, index)}"]`);
+  if (viewport && active) {
+    const target = active.offsetTop - viewport.clientHeight / 2 + active.offsetHeight / 2;
+    viewport.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  }
+}
+
 function updateKaraokeVisuals() {
   if (state.mode !== "karaoke" || !state.karaoke) return;
 
@@ -488,14 +643,26 @@ function updateKaraokeVisuals() {
   if (currentTime) currentTime.textContent = formatClock(positionMs);
   if (progressBar) progressBar.style.width = `${ratio * 100}%`;
 
-  if (state.lyricMap.length) {
-    const index = activeLyricIndex(positionMs);
-    const prev = document.querySelector("#lyricPrev");
-    const current = document.querySelector("#lyricCurrent");
-    const next = document.querySelector("#lyricNext");
-    if (prev) prev.textContent = index > 0 ? state.lyricMap[index - 1].text : "";
-    if (current) current.textContent = index >= 0 ? state.lyricMap[index].text : "♪";
-    if (next) next.textContent = index + 1 < state.lyricMap.length ? state.lyricMap[index + 1].text : "";
+  updateRollingLyrics(positionMs);
+
+  const overlay = document.querySelector("#countdownOverlay");
+  const countdownNumber = document.querySelector("#countdownNumber");
+  if (overlay) {
+    const left = Number(state.karaoke.countdownEndsAt || 0) - Date.now();
+    const showing = state.karaoke.status === "countdown" && left > 0;
+    overlay.classList.toggle("hidden", !showing);
+    if (showing && countdownNumber) countdownNumber.textContent = String(Math.max(1, Math.ceil(left / 1000)));
+  }
+
+  const live = state.karaoke.score?.live;
+  const liveAccuracy = document.querySelector("#liveAccuracy");
+  const liveCombo = document.querySelector("#liveCombo");
+  const liveVerdict = document.querySelector("#liveVerdict");
+  if (liveAccuracy) liveAccuracy.textContent = live ? `${live.accuracy}%` : "—%";
+  if (liveCombo) liveCombo.textContent = `×${Number(state.karaoke.score?.combo || 0)}`;
+  if (liveVerdict) {
+    liveVerdict.textContent = live?.verdict || "♪";
+    liveVerdict.dataset.verdict = live?.verdict || "";
   }
 
   const pause = document.querySelector("#pauseResume");
@@ -508,6 +675,7 @@ function updateKaraokeVisuals() {
   if (status) {
     const labels = {
       resolving: "Ищем аудио…",
+      countdown: "Приготовься — старт через 3 секунды",
       buffering: "Буферизация…",
       playing: `Играет в ${state.connectedChannel || "voice"}`,
       paused: "Пауза",
@@ -537,9 +705,16 @@ async function pollKaraokeState() {
     if (data.channelName) state.connectedChannel = data.channelName;
     updateKaraokeVisuals();
 
+    if (data.status === "finished" && oldStatus !== "finished") {
+      stopKaraokeLoops();
+      state.mode = "result";
+      render();
+      return;
+    }
+
     if (data.status === "error" && oldStatus !== "error") {
-      const current = document.querySelector("#lyricCurrent");
-      if (current) current.textContent = errorMessage(data.error || "AUDIO_PLAYER_ERROR");
+      const status = document.querySelector("#playbackStatus");
+      if (status) status.textContent = errorMessage(data.error || "AUDIO_PLAYER_ERROR");
     }
   } catch (error) {
     console.debug("karaoke state poll", error);
@@ -591,10 +766,14 @@ async function stopCurrentKaraoke() {
     console.error(error);
   } finally {
     stopKaraokeLoops();
-    state.karaoke = null;
-    state.mode = "library";
-    render();
-    statusMessage("Караоке остановлено. Бот остался в голосовом канале.", "info");
+    if (state.karaoke?.score?.result) {
+      state.mode = "result";
+      render();
+    } else {
+      state.mode = "library";
+      render();
+      statusMessage("Караоке остановлено. Бот остался в голосовом канале.", "info");
+    }
   }
 }
 
