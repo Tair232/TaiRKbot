@@ -1,374 +1,1086 @@
-:root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #f8f8fb;
-  background: #0b0c10;
-  font-synthesis: none;
-  --panel: rgba(23, 24, 31, 0.88);
-  --panel-2: rgba(31, 32, 42, 0.9);
-  --line: rgba(255,255,255,.09);
-  --muted: #9ea0ad;
-  --accent: #ff395f;
-  --accent-2: #9b5cff;
-}
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background:
-  radial-gradient(circle at 10% 0%, rgba(155,92,255,.22), transparent 30%),
-  radial-gradient(circle at 90% 0%, rgba(255,57,95,.18), transparent 28%),
-  #0b0c10; }
-button, input { font: inherit; }
-button { color: inherit; }
-.shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 42px; }
-.topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom: 28px; }
-.brand { display:flex; align-items:center; gap:12px; }
-.brand-mark { width:42px; height:42px; border-radius:14px; display:grid; place-items:center; font-size:22px; font-weight:900; background:linear-gradient(135deg,var(--accent),var(--accent-2)); box-shadow:0 10px 30px rgba(155,92,255,.22); }
-.brand strong { display:block; letter-spacing:.12em; }
-.brand span { color:var(--muted); font-size:12px; }
-.user-chip { display:flex; align-items:center; gap:8px; border:1px solid var(--line); background:rgba(255,255,255,.04); padding:6px 10px 6px 6px; border-radius:999px; font-size:13px; }
-.user-chip img,.avatar-fallback { width:28px; height:28px; border-radius:50%; object-fit:cover; background:#2c2d36; display:grid; place-items:center; }
-.hero { padding: 34px 0 24px; max-width: 860px; }
-.eyebrow { color:#ff6a86; font-weight:800; letter-spacing:.16em; font-size:11px; }
-.hero h1 { font-size:clamp(36px,7vw,72px); line-height:.98; margin:10px 0 12px; letter-spacing:-.055em; }
-.hero p { margin:0 0 22px; color:var(--muted); font-size:15px; }
-.searchbox { height:62px; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:12px; padding:0 18px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.075); border-radius:18px; backdrop-filter:blur(12px); box-shadow:0 20px 50px rgba(0,0,0,.18); }
-.searchbox > span { font-size:28px; color:#d5d5dc; transform:translateY(-2px); }
-.searchbox input { width:100%; border:0; outline:0; color:white; background:transparent; font-size:17px; }
-.searchbox input::placeholder { color:#777986; }
-kbd { color:#777986; border:1px solid var(--line); padding:4px 7px; border-radius:7px; font-size:10px; }
-.chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-.chip { border:1px solid var(--line); background:rgba(255,255,255,.04); border-radius:999px; padding:8px 12px; cursor:pointer; color:#c9cad2; font-size:12px; transition:.18s ease; }
-.chip:hover { background:rgba(255,255,255,.1); color:white; transform:translateY(-1px); }
-.status { min-height:38px; display:inline-flex; align-items:center; border-radius:10px; padding:8px 12px; margin:2px 0 14px; font-size:12px; color:var(--muted); background:rgba(255,255,255,.04); }
-.status[data-type="ok"] { color:#83e6b2; }
-.status[data-type="error"] { color:#ff8299; }
-.status[data-type="warn"] { color:#ffd27d; }
-.status[data-type="loading"] { color:#d7c8ff; }
-.content-grid { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(300px,.75fr); gap:16px; align-items:start; }
-.results-panel,.now-panel { border:1px solid var(--line); background:var(--panel); border-radius:22px; backdrop-filter:blur(18px); overflow:hidden; }
-.results-panel { padding:18px; }
-.section-title { display:flex; justify-content:space-between; align-items:end; margin-bottom:12px; }
-.section-title span { font-size:14px; font-weight:800; }
-.section-title small { color:var(--muted); }
-.results { display:grid; gap:8px; }
-.track { width:100%; border:1px solid transparent; background:rgba(255,255,255,.035); padding:10px; border-radius:14px; display:grid; grid-template-columns:48px minmax(0,1fr) auto auto; gap:12px; align-items:center; text-align:left; cursor:pointer; transition:.18s ease; }
-.track:hover { background:rgba(255,255,255,.075); }
-.track.selected { border-color:rgba(255,74,111,.48); background:linear-gradient(90deg,rgba(255,57,95,.10),rgba(155,92,255,.06)); }
-.cover,.big-cover { display:grid; place-items:center; background:linear-gradient(135deg,#272932,#15161b); border:1px solid var(--line); color:#777a87; }
-.cover { width:48px; height:48px; border-radius:11px; font-size:20px; }
-.track-main { min-width:0; }
-.track-main strong,.track-main > span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.track-main strong { font-size:13px; }
-.track-main > span { color:var(--muted); font-size:12px; margin-top:2px; }
-.badges { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
-.badges em { font-style:normal; font-size:9px; color:#cbbdff; background:rgba(155,92,255,.12); padding:3px 6px; border-radius:999px; }
-.badges em.muted { color:#858793; background:rgba(255,255,255,.04); }
-.duration { color:var(--muted); font-size:11px; }
-.arrow { font-size:24px; color:#696b76; }
-.empty { min-height:310px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--muted); padding:30px; }
-.empty-icon { width:66px; height:66px; border-radius:22px; display:grid; place-items:center; background:rgba(255,255,255,.05); font-size:28px; color:#646672; margin-bottom:14px; }
-.empty strong { color:#e8e8ed; margin-bottom:5px; }
-.empty span { font-size:12px; max-width:360px; }
-.now-panel { padding:20px; position:sticky; top:16px; min-height:380px; }
-.vinyl { width:120px; height:120px; margin:22px auto; border-radius:50%; display:grid; place-items:center; background:radial-gradient(circle,#17181e 0 14%,#3c3d46 15% 17%,#15161a 18% 33%,#292a31 34% 36%,#111217 37%); color:#8c8f9d; font-size:26px; }
-.now-panel > h2,.now-panel > p { text-align:center; }
-.now-panel > h2 { margin:8px 0; }
-.now-panel > p { color:var(--muted); font-size:13px; }
-.selected-head { display:flex; gap:14px; align-items:center; }
-.big-cover { width:72px; height:72px; flex:none; border-radius:18px; font-size:27px; }
-.selected-head h2 { margin:5px 0 3px; font-size:19px; line-height:1.1; }
-.selected-head p { margin:0; color:var(--muted); font-size:12px; }
-.lyrics-preview { margin:22px 0; padding:18px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); text-align:center; display:grid; gap:8px; }
-.lyric-line { color:#838590; font-size:12px; }
-.lyric-line.active { color:white; font-size:15px; font-weight:800; }
-.muted-line { color:#676975; }
-.voice-card { display:flex; align-items:center; justify-content:space-between; gap:10px; background:rgba(255,255,255,.04); border-radius:14px; padding:12px; }
-.voice-card strong,.voice-card span { display:block; }
-.voice-card strong { font-size:12px; }
-.voice-card span { color:var(--muted); font-size:10px; margin-top:2px; }
-.primary,.secondary { border:0; border-radius:10px; padding:9px 11px; cursor:pointer; font-weight:700; font-size:11px; white-space:nowrap; }
-.primary { background:white; color:#101116; }
-.secondary { background:rgba(255,255,255,.08); }
-.sing-button { width:100%; margin-top:12px; border:0; border-radius:14px; min-height:60px; background:linear-gradient(135deg,var(--accent),var(--accent-2)); display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto; column-gap:9px; justify-content:center; align-items:center; padding:10px 20px; font-weight:900; opacity:.42; cursor:not-allowed; }
-.sing-button > span { grid-row:1 / 3; font-size:16px; }
-.sing-button small { font-weight:500; opacity:.8; font-size:9px; }
-.boot,.fatal { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px; }
-.boot span,.fatal p,.fatal-help { color:var(--muted); }
-.spinner { width:44px; height:44px; border-radius:50%; border:3px solid rgba(255,255,255,.08); border-top-color:#b596ff; animation:spin .8s linear infinite; margin-bottom:16px; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.fatal-icon { width:58px; height:58px; border-radius:18px; display:grid; place-items:center; background:rgba(255,57,95,.14); color:#ff718d; font-size:26px; font-weight:900; }
-.fatal h1 { margin:16px 0 8px; font-size:24px; }
-.fatal p { margin:0; font-family:ui-monospace,monospace; }
-.fatal-help { margin-top:18px; max-width:520px; font-size:12px; }
-@media (max-width: 820px) {
-  .content-grid { grid-template-columns:1fr; }
-  .now-panel { position:static; }
-  .shell { width:min(100% - 20px,1180px); padding-top:12px; }
-  .hero { padding-top:20px; }
-  kbd { display:none; }
-  .searchbox { grid-template-columns:auto 1fr; }
-}
-@media (max-width: 520px) {
-  .brand span,.user-chip span,.duration { display:none; }
-  .hero h1 { font-size:44px; }
-  .track { grid-template-columns:44px minmax(0,1fr) auto; }
-  .track .cover { width:44px; height:44px; }
-  .arrow { display:none; }
+import { DiscordSDK } from "@discord/embedded-app-sdk";
+import "./style.css";
+
+const app = document.querySelector("#app");
+
+const state = {
+  sdk: null,
+  auth: null,
+  accessToken: null,
+  guildId: null,
+  channelId: null,
+  selected: null,
+  results: [],
+  connectedChannel: null,
+  mode: "library",
+  karaoke: null,
+  lyricMap: [],
+  pollTimer: null,
+  visualTimer: null,
+  activeLyricIndex: -999,
+  pitchTrail: [],
+  lastSingerPitchSeq: 0,
+  pitchRange: { min: 48, max: 72 },
+};
+
+const popular = [
+  "Кино",
+  "Король и Шут",
+  "Сектор Газа",
+  "Ария",
+  "Кипелов",
+  "Три дня дождя",
+  "Дайте танк (!)",
+  "Молчат Дома",
+];
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-/* --- Karaoke player v0.2 --- */
-.sing-button.ready { opacity:1; cursor:pointer; transition:transform .18s ease, filter .18s ease; }
-.sing-button.ready:hover { transform:translateY(-1px); filter:brightness(1.08); }
-.sing-button:disabled { cursor:wait; }
-.loading-button { grid-template-columns:auto 1fr; }
-.tiny-spinner { width:15px; height:15px; border-radius:50%; border:2px solid rgba(255,255,255,.3); border-top-color:white; animation:spin .75s linear infinite; grid-row:1 / 3; }
-
-.karaoke-shell { min-height:100vh; width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:20px 0 36px; display:flex; flex-direction:column; }
-.karaoke-topbar { height:54px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:16px; }
-.ghost-button { justify-self:start; border:1px solid var(--line); background:rgba(255,255,255,.05); color:#d9dae1; border-radius:11px; padding:9px 12px; cursor:pointer; }
-.karaoke-title-mini { text-align:center; min-width:0; }
-.karaoke-title-mini strong,.karaoke-title-mini span { display:block; max-width:420px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.karaoke-title-mini strong { font-size:12px; }
-.karaoke-title-mini span { color:var(--muted); font-size:10px; margin-top:2px; }
-.live-pill { justify-self:end; display:flex; align-items:center; gap:7px; padding:7px 10px; border:1px solid rgba(255,57,95,.28); background:rgba(255,57,95,.08); color:#ff7993; border-radius:999px; font-size:10px; font-weight:900; letter-spacing:.08em; }
-.live-pill i { width:7px; height:7px; border-radius:50%; background:#ff496c; box-shadow:0 0 0 4px rgba(255,73,108,.11); }
-.karaoke-stage { flex:1; min-height:620px; margin-top:14px; border:1px solid var(--line); border-radius:28px; overflow:hidden; position:relative; background:linear-gradient(180deg,rgba(28,27,38,.9),rgba(11,12,16,.96)); display:flex; flex-direction:column; align-items:center; padding:48px clamp(18px,5vw,64px) 24px; box-shadow:0 30px 80px rgba(0,0,0,.28); }
-.stage-glow { pointer-events:none; position:absolute; inset:-30% 10% auto; height:430px; background:radial-gradient(ellipse,rgba(155,92,255,.24),rgba(255,57,95,.12) 38%,transparent 70%); filter:blur(25px); }
-.stage-meta { position:relative; text-align:center; z-index:1; }
-.stage-meta h1 { margin:8px 0 4px; font-size:clamp(26px,4vw,46px); line-height:1; letter-spacing:-.04em; }
-.stage-meta p { margin:0; color:var(--muted); }
-.lyrics-stage { position:relative; z-index:1; width:min(900px,100%); flex:1; min-height:300px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:22px; padding:36px 0; }
-.stage-lyric { width:100%; transition:opacity .18s ease, transform .18s ease; text-wrap:balance; }
-.stage-lyric.previous,.stage-lyric.next { color:#777986; font-size:clamp(14px,2vw,21px); opacity:.68; }
-.stage-lyric.current { color:#fff; font-size:clamp(27px,5vw,54px); font-weight:900; line-height:1.08; letter-spacing:-.035em; text-shadow:0 8px 35px rgba(155,92,255,.22); }
-.lyrics-stage.no-sync .stage-lyric.current { font-size:clamp(23px,4vw,42px); }
-.player-block { position:relative; z-index:1; width:min(820px,100%); }
-.time-row { display:flex; justify-content:space-between; color:#989aa5; font-size:11px; font-variant-numeric:tabular-nums; margin-bottom:8px; }
-.progress-track { width:100%; height:7px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; box-shadow:inset 0 1px 2px rgba(0,0,0,.35); }
-.progress-bar { width:0; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--accent),var(--accent-2)); transition:width .1s linear; }
-.player-controls { display:flex; justify-content:center; gap:9px; margin-top:16px; }
-.control-button { min-width:126px; border:1px solid var(--line); background:rgba(255,255,255,.08); color:white; border-radius:12px; padding:11px 14px; cursor:pointer; font-weight:800; font-size:12px; }
-.control-button:hover { background:rgba(255,255,255,.12); }
-.control-button:disabled { opacity:.4; cursor:not-allowed; }
-.control-button.danger { color:#ff8ba1; background:rgba(255,57,95,.08); border-color:rgba(255,57,95,.18); }
-.source-row { position:relative; z-index:1; width:100%; display:flex; justify-content:space-between; gap:15px; padding-top:22px; margin-top:22px; border-top:1px solid var(--line); color:#777986; font-size:10px; }
-.source-row span:last-child { text-align:right; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-@media (max-width: 700px) {
-  .karaoke-shell { width:min(100% - 16px,1180px); padding-top:8px; }
-  .karaoke-topbar { grid-template-columns:auto 1fr auto; }
-  .karaoke-title-mini span { display:none; }
-  .live-pill { font-size:0; padding:8px; }
-  .karaoke-stage { min-height:calc(100vh - 80px); margin-top:8px; border-radius:20px; padding:30px 16px 18px; }
-  .lyrics-stage { min-height:280px; gap:16px; }
-  .source-row { flex-direction:column; text-align:center; }
-  .source-row span:last-child { max-width:100%; text-align:center; }
+function formatDuration(seconds) {
+  if (!seconds) return "—";
+  const min = Math.floor(seconds / 60);
+  const sec = Math.round(seconds % 60).toString().padStart(2, "0");
+  return `${min}:${sec}`;
 }
 
-/* --- Karaoke QOL v0.3 --- */
-.countdown-overlay { position:absolute; inset:0; z-index:20; display:grid; place-items:center; align-content:center; gap:8px; background:rgba(8,9,13,.78); backdrop-filter:blur(16px); transition:opacity .18s ease, visibility .18s ease; }
-.countdown-overlay.hidden { opacity:0; visibility:hidden; pointer-events:none; }
-.countdown-overlay span { font-size:12px; letter-spacing:.22em; font-weight:900; color:#c9cad2; }
-.countdown-overlay strong { font-size:clamp(92px,20vw,190px); line-height:.85; letter-spacing:-.07em; text-shadow:0 15px 55px rgba(155,92,255,.45); animation:countPulse .8s ease-in-out infinite alternate; }
-@keyframes countPulse { from { transform:scale(.92); opacity:.78; } to { transform:scale(1); opacity:1; } }
-
-.lyrics-stage.synced { padding:18px 0; min-height:320px; }
-.lyrics-viewport { width:100%; height:340px; overflow:hidden; position:relative; scroll-behavior:smooth; mask-image:linear-gradient(to bottom,transparent 0,#000 17%,#000 83%,transparent 100%); }
-.lyrics-rail { padding:145px 0; }
-.rolling-lyric { width:100%; padding:10px 12px; color:#777986; opacity:.36; font-size:clamp(14px,2vw,21px); font-weight:700; line-height:1.2; transform:scale(.96); transition:color .45s ease,opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1),font-size .45s ease; text-wrap:balance; }
-.rolling-lyric.passed { opacity:.22; }
-.rolling-lyric.upcoming { opacity:.48; }
-.rolling-lyric.active { color:#fff; opacity:1; transform:scale(1); font-size:clamp(28px,5vw,54px); font-weight:900; letter-spacing:-.035em; text-shadow:0 8px 35px rgba(155,92,255,.25); }
-
-.lyrics-stage.no-sync { width:min(900px,100%); min-height:320px; padding:18px 0; }
-.manual-lyrics-wrap { width:100%; }
-.manual-hint { margin-bottom:12px; color:#858794; font-size:10px; font-weight:900; letter-spacing:.13em; }
-.manual-lyrics { width:100%; height:320px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.24) transparent; padding:42px clamp(8px,3vw,28px); border:1px solid rgba(255,255,255,.07); background:rgba(255,255,255,.025); border-radius:18px; text-align:center; scroll-behavior:smooth; }
-.manual-lyrics div { margin:0 0 18px; color:#e5e5eb; font-size:clamp(18px,3vw,31px); line-height:1.25; font-weight:750; text-wrap:balance; }
-.manual-lyrics div:last-child { margin-bottom:70px; }
-.manual-lyrics.empty-manual { display:grid; place-items:center; align-content:center; gap:8px; color:var(--muted); }
-.manual-lyrics.empty-manual strong { color:white; font-size:22px; }
-
-.live-score-row { position:relative; z-index:2; width:min(760px,100%); display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:8px; margin:0 0 18px; }
-.live-score-card { border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.035); border-radius:13px; padding:9px 12px; text-align:center; }
-.live-score-card span { display:block; color:#777986; font-size:9px; font-weight:900; letter-spacing:.12em; }
-.live-score-card strong { display:block; margin-top:4px; font-size:16px; }
-.verdict-card strong[data-verdict="PERFECT"] { color:#82ffd0; }
-.verdict-card strong[data-verdict="GREAT"] { color:#a6c8ff; }
-.verdict-card strong[data-verdict="GOOD"] { color:#ffe18a; }
-.verdict-card strong[data-verdict="MISS"] { color:#ff7993; }
-
-.result-shell { min-height:100vh; display:grid; place-items:center; width:min(980px,calc(100% - 28px)); margin:0 auto; padding:28px 0; }
-.result-card { width:min(780px,100%); position:relative; overflow:hidden; border:1px solid var(--line); background:linear-gradient(180deg,rgba(28,27,38,.95),rgba(11,12,16,.98)); border-radius:28px; padding:36px clamp(20px,6vw,64px); text-align:center; box-shadow:0 30px 90px rgba(0,0,0,.34); }
-.result-card::before { content:""; position:absolute; inset:-180px 10% auto; height:340px; background:radial-gradient(ellipse,rgba(155,92,255,.28),rgba(255,57,95,.12) 42%,transparent 72%); filter:blur(20px); pointer-events:none; }
-.result-card > * { position:relative; }
-.result-eyebrow { color:#ff6a86; font-weight:900; letter-spacing:.18em; font-size:10px; }
-.result-card h1 { margin:10px 0 4px; font-size:clamp(28px,5vw,48px); letter-spacing:-.045em; }
-.result-artist { margin:0 0 26px; color:var(--muted); }
-.grade-orb { width:105px; height:105px; margin:0 auto 14px; border-radius:50%; display:grid; place-items:center; font-size:43px; font-weight:1000; background:linear-gradient(135deg,rgba(255,57,95,.95),rgba(155,92,255,.95)); box-shadow:0 18px 48px rgba(155,92,255,.3); }
-.big-result-score { font-size:clamp(48px,10vw,86px); line-height:.95; font-weight:1000; letter-spacing:-.065em; font-variant-numeric:tabular-nums; }
-.result-caption { margin-top:7px; color:#777986; font-size:9px; letter-spacing:.15em; font-weight:900; }
-.result-bars { display:grid; gap:13px; margin:32px 0 24px; text-align:left; }
-.result-bar-row > div:first-child { display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; }
-.result-bar-row span { color:#a8a9b2; }
-.result-bar-track { height:8px; border-radius:999px; background:rgba(255,255,255,.07); overflow:hidden; }
-.result-bar-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--accent),var(--accent-2)); }
-.hit-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-.hit-grid div { border:1px solid rgba(255,255,255,.07); border-radius:13px; padding:12px 8px; background:rgba(255,255,255,.025); }
-.hit-grid strong { display:block; font-size:22px; }
-.hit-grid span { color:#858794; font-size:8px; letter-spacing:.08em; font-weight:900; }
-.max-combo { margin:18px 0 0; color:#c6c7cf; }
-.beta-note { margin:20px auto 0; max-width:600px; color:#727481; font-size:11px; line-height:1.5; }
-.no-score { padding:32px 0 22px; }
-.no-score-icon { width:86px; height:86px; margin:0 auto 15px; border-radius:50%; display:grid; place-items:center; font-size:40px; background:rgba(255,255,255,.06); }
-.no-score h2 { margin:0 0 8px; }
-.no-score p { margin:0; color:var(--muted); }
-.result-actions { display:flex; justify-content:center; gap:9px; margin-top:28px; }
-.result-button { min-width:150px; border-radius:12px; padding:12px 16px; cursor:pointer; }
-
-@media (max-width:700px) {
-  .lyrics-viewport,.manual-lyrics { height:290px; }
-  .lyrics-rail { padding:120px 0; }
-  .live-score-row { grid-template-columns:1fr 1.2fr 1fr; }
-  .live-score-card { padding:8px 5px; }
-  .hit-grid { grid-template-columns:repeat(2,1fr); }
-  .result-actions { flex-direction:column; }
-  .result-button { width:100%; }
+function formatClock(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const min = Math.floor(total / 60);
+  const sec = String(total % 60).padStart(2, "0");
+  return `${min}:${sec}`;
 }
 
-
-/* === 0.4 · Smule-like note highway === */
-.pitch-guide-card {
-  position: relative;
-  z-index: 2;
-  width: min(980px, 100%);
-  margin: 24px auto 4px;
-  border: 1px solid rgba(255,255,255,.085);
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at 72% 10%, rgba(97,207,255,.08), transparent 36%),
-    linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
-  overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
-}
-.pitch-guide-head {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 9px 15px 8px;
-  border-bottom: 1px solid rgba(255,255,255,.055);
-}
-.pitch-guide-head > div:first-child {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-.pitch-kicker {
-  color: #777986;
-  font-size: 9px;
-  font-weight: 900;
-  letter-spacing: .13em;
-}
-#singerNote {
-  font-size: 20px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-.pitch-legend {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  color: #858793;
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: .08em;
-}
-.pitch-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.pitch-legend i {
-  display: inline-block;
-  flex: 0 0 auto;
-}
-.legend-target {
-  width: 20px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(170,111,246,.85);
-  box-shadow: 0 0 12px rgba(170,111,246,.35);
-}
-.legend-voice {
-  width: 16px;
-  height: 3px;
-  border-radius: 999px;
-  background: #4ae7ff;
-  box-shadow: 0 0 10px rgba(74,231,255,.7);
-}
-.pitch-canvas-wrap {
-  position: relative;
-  height: 220px;
-  overflow: hidden;
-  background:
-    linear-gradient(90deg, rgba(255,255,255,.018), transparent 22%, transparent 78%, rgba(255,255,255,.012)),
-    rgba(4,5,9,.28);
-}
-.pitch-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.pitch-playhead {
-  position: absolute;
-  left: 27%;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  pointer-events: none;
-}
-.pitch-playhead i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: linear-gradient(180deg, transparent 0, rgba(255,255,255,.28) 11%, rgba(255,255,255,.82) 47%, rgba(255,255,255,.28) 89%, transparent);
-  box-shadow: 0 0 18px rgba(255,255,255,.18);
-}
-.pitch-playhead span {
-  position: absolute;
-  top: 9px;
-  left: 7px;
-  color: rgba(255,255,255,.38);
-  font-size: 8px;
-  font-weight: 900;
-  letter-spacing: .12em;
-}
-.pitch-waiting {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: rgba(255,255,255,.34);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .05em;
-  pointer-events: none;
-  transition: opacity .2s ease;
-}
-.pitch-waiting.hidden {
-  opacity: 0;
+function firstLyricsLines(track) {
+  const source = track.syncedLyrics || track.plainLyrics || "";
+  return source
+    .split("\n")
+    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
 }
 
-@media (max-width: 720px) {
-  .pitch-guide-card { margin-top: 16px; border-radius: 16px; }
-  .pitch-canvas-wrap { height: 178px; }
-  .pitch-guide-head { padding-inline: 11px; }
-  .pitch-legend { gap: 8px; font-size: 8px; }
-  .pitch-kicker { display: none; }
-  #singerNote { font-size: 18px; }
+function parseSyncedLyrics(source = "") {
+  return String(source)
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$/);
+      if (!match) return null;
+
+      const minutes = Number(match[1]);
+      const seconds = Number(match[2]);
+      const fractionRaw = match[3] || "0";
+      const fractionMs = Number(fractionRaw.padEnd(3, "0").slice(0, 3));
+      const text = match[4].trim();
+
+      return {
+        timeMs: (minutes * 60 + seconds) * 1000 + fractionMs,
+        text: text || "♪",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.timeMs - b.timeMs);
 }
 
-@media (max-width: 480px) {
-  .pitch-legend span:first-child { display: none; }
-  .pitch-canvas-wrap { height: 158px; }
+function plainLyricsLines(source = "") {
+  return String(source)
+    .split("\n")
+    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
+    .filter(Boolean);
 }
+
+function statusMessage(text, type = "info") {
+  const el = document.querySelector("#status");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.type = type;
+}
+
+function authHeaders() {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${state.accessToken}`,
+  };
+}
+
+function errorMessage(code) {
+  const messages = {
+    USER_NOT_IN_VOICE: "Сначала зайди в голосовой канал.",
+    CHANNEL_NOT_JOINABLE: "Бот не может подключиться к этому каналу.",
+    CHANNEL_NOT_SPEAKABLE: "У бота нет права «Говорить» в этом канале.",
+    BOT_NOT_READY: "Бот ещё не вошёл в Discord. Проверь токен на Bothost.",
+    GUILD_NOT_FOUND: "Бота нет на этом сервере Discord.",
+    VOICE_CONNECTION_FAILED: "Не удалось установить voice-соединение.",
+    AUDIO_NOT_FOUND: "Не удалось найти подходящую запись этой песни.",
+    AUDIO_STREAM_FAILED: "Нашли песню, но не удалось получить аудиопоток.",
+    AUDIO_PLAYER_ERROR: "Discord не смог воспроизвести аудиопоток.",
+    TRACK_INVALID: "Некорректные данные песни.",
+  };
+  return messages[code] || `Ошибка: ${code}`;
+}
+
+function render() {
+  if (state.mode === "result" && state.selected) {
+    renderResult();
+    return;
+  }
+  if (state.mode === "karaoke" && state.selected) {
+    renderKaraoke();
+    return;
+  }
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const user = state.auth?.user;
+  app.innerHTML = `
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">♪</div>
+          <div>
+            <strong>КАРАОКЕ</strong>
+            <span>русские песни внутри Discord</span>
+          </div>
+        </div>
+        <div class="user-chip">
+          ${user?.avatar ? `<img src="https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64" alt="">` : `<div class="avatar-fallback">${escapeHtml(user?.username?.[0] || "?")}</div>`}
+          <span>${escapeHtml(user?.global_name || user?.username || "Discord")}</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="eyebrow">РУССКОЕ КАРАОКЕ</div>
+        <h1>Что будем петь?</h1>
+        <p>Найди песню или исполнителя. Синхронный текст ставим выше в выдаче.</p>
+        <label class="searchbox">
+          <span>⌕</span>
+          <input id="search" autocomplete="off" placeholder="Например: Кино — Группа крови" />
+          <kbd>Enter</kbd>
+        </label>
+        <div class="chips">
+          ${popular.map((name) => `<button class="chip" data-search="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
+        </div>
+      </section>
+
+      <div id="status" class="status" data-type="info">Готово к поиску</div>
+
+      <section class="content-grid">
+        <div class="results-panel">
+          <div class="section-title">
+            <span>${state.results.length ? "Результаты" : "Популярное"}</span>
+            <small>${state.results.length ? `${state.results.length} вариантов` : "нажми исполнителя выше"}</small>
+          </div>
+          <div id="results" class="results">
+            ${state.results.length ? state.results.map(trackCard).join("") : emptyState()}
+          </div>
+        </div>
+
+        <aside class="now-panel">
+          ${state.selected ? selectedCard(state.selected) : `
+            <div class="vinyl">♪</div>
+            <h2>Песня не выбрана</h2>
+            <p>Найди трек слева — здесь появятся текст и кнопка запуска караоке.</p>
+          `}
+        </aside>
+      </section>
+    </main>
+  `;
+
+  bindLibraryEvents();
+}
+
+function emptyState() {
+  return `
+    <div class="empty">
+      <div class="empty-icon">♫</div>
+      <strong>Начни с поиска</strong>
+      <span>Мы используем LRCLIB и отдаём приоритет кириллице и синхронному тексту.</span>
+    </div>
+  `;
+}
+
+function trackCard(track) {
+  const selected = state.selected?.id === track.id;
+  return `
+    <button class="track ${selected ? "selected" : ""}" data-track-id="${track.id}">
+      <div class="cover"><span>♪</span></div>
+      <div class="track-main">
+        <strong>${escapeHtml(track.title)}</strong>
+        <span>${escapeHtml(track.artist)}</span>
+        <div class="badges">
+          ${track.hasSyncedLyrics ? `<em>● Синхронный текст</em>` : track.hasLyrics ? `<em>Текст</em>` : `<em class="muted">Без текста</em>`}
+          ${track.instrumental ? `<em>Инструментал</em>` : ""}
+        </div>
+      </div>
+      <div class="duration">${formatDuration(track.duration)}</div>
+      <div class="arrow">›</div>
+    </button>
+  `;
+}
+
+function selectedCard(track) {
+  const lines = firstLyricsLines(track);
+  return `
+    <div class="selected-head">
+      <div class="big-cover">♪</div>
+      <div>
+        <div class="eyebrow">ВЫБРАНО</div>
+        <h2>${escapeHtml(track.title)}</h2>
+        <p>${escapeHtml(track.artist)} · ${formatDuration(track.duration)}</p>
+      </div>
+    </div>
+
+    <div class="lyrics-preview">
+      ${lines.length ? lines.map((line, i) => `<div class="lyric-line ${i === 1 ? "active" : ""}">${escapeHtml(line)}</div>`).join("") : `<div class="lyric-line muted-line">Для этой версии текста пока нет.</div>`}
+    </div>
+
+    <div class="voice-card">
+      <div>
+        <strong>${state.connectedChannel ? `Подключено: ${escapeHtml(state.connectedChannel)}` : "Голосовой канал"}</strong>
+        <span>${state.connectedChannel ? "Бот уже в твоём канале" : "Можно подключить заранее или просто нажать «Начать петь»"}</span>
+      </div>
+      ${state.connectedChannel
+        ? `<button id="leaveVoice" class="secondary">Отключить</button>`
+        : `<button id="joinVoice" class="primary">Подключить</button>`}
+    </div>
+
+    <button id="startKaraoke" class="sing-button ready">
+      <span>▶</span>
+      НАЧАТЬ ПЕТЬ
+      <small>${track.hasSyncedLyrics ? "синхронный текст готов" : track.hasLyrics ? "обычный текст — листай вручную во время песни" : "для этой версии текста нет"}</small>
+    </button>
+  `;
+}
+
+function bindLibraryEvents() {
+  const input = document.querySelector("#search");
+  input?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") doSearch(input.value);
+  });
+
+  document.querySelectorAll("[data-search]").forEach((button) => {
+    button.addEventListener("click", () => {
+      input.value = button.dataset.search;
+      doSearch(button.dataset.search);
+    });
+  });
+
+  document.querySelectorAll("[data-track-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = Number(button.dataset.trackId);
+      state.selected = state.results.find((track) => track.id === id) || null;
+      render();
+    });
+  });
+
+  document.querySelector("#joinVoice")?.addEventListener("click", joinVoice);
+  document.querySelector("#leaveVoice")?.addEventListener("click", leaveVoice);
+  document.querySelector("#startKaraoke")?.addEventListener("click", startSelectedKaraoke);
+}
+
+async function doSearch(query) {
+  const q = String(query || "").trim();
+  if (q.length < 2) {
+    statusMessage("Введи хотя бы 2 символа", "warn");
+    return;
+  }
+
+  statusMessage(`Ищем «${q}»…`, "loading");
+  try {
+    const response = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "SEARCH_FAILED");
+    state.results = data.results || [];
+    state.selected = state.results[0] || null;
+    render();
+    statusMessage(state.results.length ? "Нашёл. Выбери подходящую версию песни." : "Ничего не нашлось", state.results.length ? "ok" : "warn");
+  } catch (error) {
+    console.error(error);
+    statusMessage("Не удалось получить песни. Попробуй ещё раз.", "error");
+  }
+}
+
+async function joinVoice() {
+  if (!state.guildId) {
+    statusMessage("Запусти Activity внутри сервера Discord, а не в ЛС.", "warn");
+    return;
+  }
+
+  statusMessage("Подключаем бота к твоему голосовому каналу…", "loading");
+  try {
+    const response = await fetch("/api/voice/join", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ guildId: state.guildId }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "VOICE_JOIN_FAILED");
+    state.connectedChannel = data.channelName;
+    render();
+    statusMessage(`Бот подключён к «${data.channelName}»`, "ok");
+  } catch (error) {
+    statusMessage(errorMessage(error.message), "error");
+  }
+}
+
+async function leaveVoice() {
+  try {
+    await fetch("/api/voice/leave", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ guildId: state.guildId }),
+    });
+  } finally {
+    stopKaraokeLoops();
+    state.connectedChannel = null;
+    state.karaoke = null;
+    state.mode = "library";
+    render();
+    statusMessage("Бот отключён от голосового канала", "info");
+  }
+}
+
+async function startSelectedKaraoke() {
+  if (!state.guildId) {
+    statusMessage("Запусти Activity внутри сервера Discord.", "warn");
+    return;
+  }
+  if (!state.selected) return;
+
+  const button = document.querySelector("#startKaraoke");
+  if (button) {
+    button.disabled = true;
+    button.classList.add("loading-button");
+    button.innerHTML = `<span class="tiny-spinner"></span> ИЩЕМ АУДИО… <small>обычно несколько секунд</small>`;
+  }
+  statusMessage("Ищем подходящую запись и подключаем бота…", "loading");
+
+  try {
+    const track = {
+      id: state.selected.id,
+      title: state.selected.title,
+      artist: state.selected.artist,
+      album: state.selected.album,
+      duration: state.selected.duration,
+      instrumental: state.selected.instrumental,
+    };
+
+    const response = await fetch("/api/karaoke/start", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ guildId: state.guildId, track }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "KARAOKE_START_FAILED");
+
+    state.connectedChannel = data.channelName || state.connectedChannel;
+    state.lyricMap = parseSyncedLyrics(state.selected.syncedLyrics);
+    state.activeLyricIndex = -999;
+    state.pitchTrail = [];
+    state.lastSingerPitchSeq = 0;
+    state.pitchRange = { min: 48, max: 72 };
+    state.karaoke = {
+      ...data,
+      positionMs: Number(data.positionMs) || 0,
+      sampledAt: performance.now(),
+    };
+    state.mode = "karaoke";
+    render();
+    startKaraokeLoops();
+  } catch (error) {
+    console.error(error);
+    render();
+    statusMessage(errorMessage(error.message), "error");
+  }
+}
+
+function syncedLyricsMarkup() {
+  if (!state.lyricMap.length) return "";
+  return `
+    <div id="lyricsViewport" class="lyrics-viewport">
+      <div id="lyricsRail" class="lyrics-rail">
+        ${state.lyricMap.map((line, index) => `
+          <div class="rolling-lyric" data-lyric-index="${index}">${escapeHtml(line.text)}</div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function manualLyricsMarkup() {
+  const lines = plainLyricsLines(state.selected?.plainLyrics);
+  if (!lines.length) {
+    return `
+      <div class="manual-lyrics empty-manual">
+        <strong>Текста для этой версии нет</strong>
+        <span>Музыка всё равно продолжит играть.</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="manual-lyrics-wrap">
+      <div class="manual-hint">БЕЗ СИНХРОНИЗАЦИИ · ЛИСТАЙ ТЕКСТ САМ</div>
+      <div id="manualLyrics" class="manual-lyrics" tabindex="0">
+        ${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderKaraoke() {
+  const track = state.selected;
+  const source = state.karaoke?.source;
+  const durationMs = Math.max(1, Number(track.duration || source?.duration || 0) * 1000);
+
+  app.innerHTML = `
+    <main class="karaoke-shell">
+      <header class="karaoke-topbar">
+        <button id="backLibrary" class="ghost-button">← Каталог</button>
+        <div class="karaoke-title-mini">
+          <strong>${escapeHtml(track.title)}</strong>
+          <span>${escapeHtml(track.artist)}</span>
+        </div>
+        <div class="live-pill"><i></i> КАРАОКЕ</div>
+      </header>
+
+      <section class="karaoke-stage">
+        <div class="stage-glow"></div>
+        <div id="countdownOverlay" class="countdown-overlay hidden">
+          <span>ПРИГОТОВЬСЯ</span>
+          <strong id="countdownNumber">3</strong>
+        </div>
+
+        <div class="stage-meta">
+          <div class="eyebrow">СЕЙЧАС ИГРАЕТ</div>
+          <h1>${escapeHtml(track.title)}</h1>
+          <p>${escapeHtml(track.artist)}</p>
+        </div>
+
+        <div class="pitch-guide-card">
+          <div class="pitch-guide-head">
+            <div>
+              <span class="pitch-kicker">ВЫСОТА ГОЛОСА</span>
+              <strong id="singerNote">—</strong>
+            </div>
+            <div class="pitch-legend">
+              <span><i class="legend-target"></i> НОТЫ ПЕСНИ</span>
+              <span><i class="legend-voice"></i> ТВОЙ ГОЛОС</span>
+            </div>
+          </div>
+          <div class="pitch-canvas-wrap">
+            <canvas id="pitchCanvas" class="pitch-canvas"></canvas>
+            <div class="pitch-playhead">
+              <i></i>
+              <span>СЕЙЧАС</span>
+            </div>
+            <div id="pitchWaiting" class="pitch-waiting">Строим шкалу нот…</div>
+          </div>
+        </div>
+
+        <div class="lyrics-stage ${state.lyricMap.length ? "synced" : "no-sync"}">
+          ${state.lyricMap.length ? syncedLyricsMarkup() : manualLyricsMarkup()}
+        </div>
+
+        <div class="live-score-row">
+          <div class="live-score-card">
+            <span>НОТЫ</span>
+            <strong id="liveAccuracy">—%</strong>
+          </div>
+          <div class="live-score-card verdict-card">
+            <span id="liveVerdictLabel">СЛУШАЕМ ТЕБЯ</span>
+            <strong id="liveVerdict">♪</strong>
+          </div>
+          <div class="live-score-card">
+            <span>КОМБО</span>
+            <strong id="liveCombo">×0</strong>
+          </div>
+        </div>
+
+        <div class="player-block">
+          <div class="time-row">
+            <span id="currentTime">0:00</span>
+            <span id="durationTime">${formatClock(durationMs)}</span>
+          </div>
+          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+          <div class="player-controls">
+            <button id="pauseResume" class="control-button">Ⅱ Пауза</button>
+            <button id="stopKaraoke" class="control-button danger">■ Закончить</button>
+          </div>
+        </div>
+
+        <div class="source-row">
+          <span id="playbackStatus">Подключено к ${escapeHtml(state.connectedChannel || "voice")}</span>
+          <span>${source ? `Аудио: ${escapeHtml(source.title)}` : "Аудио загружается…"}</span>
+        </div>
+      </section>
+    </main>
+  `;
+
+  document.querySelector("#pauseResume")?.addEventListener("click", togglePause);
+  document.querySelector("#stopKaraoke")?.addEventListener("click", stopCurrentKaraoke);
+  document.querySelector("#backLibrary")?.addEventListener("click", async () => {
+    if (["playing", "paused", "buffering", "resolving", "countdown"].includes(state.karaoke?.status)) {
+      await stopCurrentKaraoke();
+      return;
+    }
+    stopKaraokeLoops();
+    state.mode = "library";
+    render();
+  });
+
+  updateKaraokeVisuals();
+}
+
+function renderResult() {
+  const result = state.karaoke?.score?.result;
+  const track = state.selected;
+  const available = Boolean(result?.available);
+
+  app.innerHTML = `
+    <main class="result-shell">
+      <section class="result-card">
+        <div class="result-eyebrow">РЕЗУЛЬТАТ</div>
+        <h1>${escapeHtml(track.title)}</h1>
+        <p class="result-artist">${escapeHtml(track.artist)}</p>
+
+        ${available ? `
+          <div class="grade-orb">${escapeHtml(result.grade)}</div>
+          <div class="big-result-score">${Number(result.points || 0).toLocaleString("ru-RU")}</div>
+          <div class="result-caption">ОЧКОВ · ОЦЕНКА НОТ BETA</div>
+
+          <div class="result-bars">
+            ${resultBar("Попадание в ноты", result.pitch)}
+            ${resultBar("Тайминг", result.timing)}
+            ${resultBar("Стабильность", result.stability)}
+            ${resultBar("Участие", result.participation)}
+          </div>
+
+          <div class="hit-grid">
+            <div><strong>${result.perfect}</strong><span>PERFECT</span></div>
+            <div><strong>${result.great}</strong><span>GREAT</span></div>
+            <div><strong>${result.good}</strong><span>GOOD</span></div>
+            <div><strong>${result.miss}</strong><span>MISS</span></div>
+          </div>
+          <div class="max-combo">🔥 Максимальное комбо: <strong>×${result.maxCombo}</strong></div>
+          <p class="beta-note">Пока это beta-оценка: эталон нот строится автоматически из оригинальной записи. В наушниках результат будет заметно точнее.</p>
+        ` : `
+          <div class="no-score">
+            <div class="no-score-icon">♪</div>
+            <h2>Не хватило голоса для оценки</h2>
+            <p>Нужно спеть чуть дольше, чтобы бот успел сравнить ноты.</p>
+          </div>
+        `}
+
+        <div class="result-actions">
+          <button id="singAgain" class="primary result-button">↻ Спеть ещё раз</button>
+          <button id="resultLibrary" class="secondary result-button">Каталог</button>
+        </div>
+      </section>
+    </main>
+  `;
+
+  document.querySelector("#singAgain")?.addEventListener("click", () => {
+    state.mode = "library";
+    render();
+    document.querySelector("#startKaraoke")?.click();
+  });
+  document.querySelector("#resultLibrary")?.addEventListener("click", () => {
+    state.mode = "library";
+    render();
+  });
+}
+
+function resultBar(label, value) {
+  const safe = Math.max(0, Math.min(100, Number(value) || 0));
+  return `
+    <div class="result-bar-row">
+      <div><span>${escapeHtml(label)}</span><strong>${Math.round(safe)}%</strong></div>
+      <div class="result-bar-track"><i style="width:${safe}%"></i></div>
+    </div>
+  `;
+}
+
+function estimatedPositionMs() {
+  if (!state.karaoke) return 0;
+  const base = Number(state.karaoke.positionMs) || 0;
+  if (state.karaoke.status !== "playing") return base;
+  return base + Math.max(0, performance.now() - Number(state.karaoke.sampledAt || performance.now()));
+}
+
+function activeLyricIndex(positionMs) {
+  const lines = state.lyricMap;
+  if (!lines.length) return -1;
+  let low = 0;
+  let high = lines.length - 1;
+  let answer = -1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (lines[mid].timeMs <= positionMs) {
+      answer = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return answer;
+}
+
+function updateRollingLyrics(positionMs) {
+  if (!state.lyricMap.length) return;
+  const index = activeLyricIndex(positionMs);
+  if (index === state.activeLyricIndex) return;
+  state.activeLyricIndex = index;
+
+  document.querySelectorAll(".rolling-lyric").forEach((line) => {
+    const lineIndex = Number(line.dataset.lyricIndex);
+    line.classList.toggle("active", lineIndex === index);
+    line.classList.toggle("passed", lineIndex < index);
+    line.classList.toggle("upcoming", lineIndex > index);
+  });
+
+  const viewport = document.querySelector("#lyricsViewport");
+  const active = document.querySelector(`[data-lyric-index="${Math.max(0, index)}"]`);
+  if (viewport && active) {
+    const target = active.offsetTop - viewport.clientHeight / 2 + active.offsetHeight / 2;
+    viewport.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  }
+}
+
+
+function midiToNoteName(value) {
+  if (!Number.isFinite(value)) return "—";
+  const midi = Math.round(value);
+  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+function captureSingerPitch() {
+  const sample = state.karaoke?.singerPitch;
+  if (!sample?.seq || sample.seq === state.lastSingerPitchSeq) return;
+  state.lastSingerPitchSeq = sample.seq;
+
+  if (!Number.isFinite(Number(sample.midi))) return;
+  state.pitchTrail.push({
+    seq: Number(sample.seq),
+    timeMs: Number(sample.positionMs) || estimatedPositionMs(),
+    midi: Number(sample.midi),
+    confidence: Number(sample.confidence) || 0,
+  });
+
+  const now = estimatedPositionMs();
+  state.pitchTrail = state.pitchTrail.filter((point) => point.timeMs >= now - 3200);
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, Math.abs(width) / 2, Math.abs(height) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function pitchX(timeMs, positionMs, width) {
+  const playheadX = width * 0.27;
+  const delta = timeMs - positionMs;
+  if (delta < 0) return playheadX + (delta / 2300) * playheadX;
+  return playheadX + (delta / 6200) * (width - playheadX);
+}
+
+function desiredPitchRange(segments, trail) {
+  const values = [];
+  for (const segment of segments || []) {
+    if (Number.isFinite(Number(segment.midi))) values.push(Number(segment.midi));
+  }
+  for (const point of trail || []) {
+    if (Number.isFinite(Number(point.midi))) values.push(Number(point.midi));
+  }
+
+  if (!values.length) return state.pitchRange;
+
+  let min = Math.floor(Math.min(...values)) - 2;
+  let max = Math.ceil(Math.max(...values)) + 2;
+  const center = (min + max) / 2;
+
+  if (max - min < 12) {
+    min = center - 6;
+    max = center + 6;
+  }
+  if (max - min > 25) {
+    min = center - 12.5;
+    max = center + 12.5;
+  }
+
+  return {
+    min: Math.max(28, min),
+    max: Math.min(98, max),
+  };
+}
+
+function pitchY(midi, minMidi, maxMidi, height) {
+  const pad = 18;
+  const usable = Math.max(1, height - pad * 2);
+  const ratio = (midi - minMidi) / Math.max(1, maxMidi - minMidi);
+  return height - pad - Math.max(0, Math.min(1, ratio)) * usable;
+}
+
+function drawPitchGuide(positionMs) {
+  const canvas = document.querySelector("#pitchCanvas");
+  if (!canvas) return;
+
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(bounds.width));
+  const height = Math.max(1, Math.round(bounds.height));
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+  const pixelW = Math.round(width * dpr);
+  const pixelH = Math.round(height * dpr);
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const guide = state.karaoke?.noteGuide;
+  const segments = guide?.segments || [];
+
+  const targetRange = desiredPitchRange(segments, state.pitchTrail);
+  state.pitchRange.min += (targetRange.min - state.pitchRange.min) * 0.12;
+  state.pitchRange.max += (targetRange.max - state.pitchRange.max) * 0.12;
+
+  const minMidi = state.pitchRange.min;
+  const maxMidi = state.pitchRange.max;
+
+  // Тонкая нотная сетка.
+  const firstMidi = Math.floor(minMidi);
+  const lastMidi = Math.ceil(maxMidi);
+  ctx.font = "700 9px Inter, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+
+  for (let midi = firstMidi; midi <= lastMidi; midi += 1) {
+    const y = pitchY(midi, minMidi, maxMidi, height);
+    const isC = ((midi % 12) + 12) % 12 === 0;
+
+    ctx.strokeStyle = isC ? "rgba(255,255,255,.105)" : "rgba(255,255,255,.035)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y) + 0.5);
+    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.stroke();
+
+    if (isC) {
+      ctx.fillStyle = "rgba(255,255,255,.28)";
+      ctx.fillText(midiToNoteName(midi), 8, y - 7);
+    }
+  }
+
+  // Ноты песни едут справа налево относительно фиксированного playhead.
+  for (const segment of segments) {
+    const x1 = pitchX(Number(segment.startMs), positionMs, width);
+    const x2 = pitchX(Number(segment.endMs), positionMs, width);
+    if (x2 < -20 || x1 > width + 20) continue;
+
+    const y = pitchY(Number(segment.midi), minMidi, maxMidi, height);
+    const barH = 12;
+    const isActive =
+      Number(segment.startMs) <= positionMs &&
+      Number(segment.endMs) >= positionMs;
+    const passed = Number(segment.endMs) < positionMs;
+
+    const left = Math.max(-10, x1);
+    const barW = Math.max(8, x2 - x1);
+
+    ctx.save();
+    if (isActive) {
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = "rgba(177,117,255,.82)";
+      ctx.fillStyle = "rgba(210,181,255,.98)";
+    } else if (passed) {
+      ctx.fillStyle = "rgba(138,101,196,.28)";
+    } else {
+      ctx.fillStyle = "rgba(159,104,239,.72)";
+    }
+
+    roundedRect(ctx, left, y - barH / 2, barW, barH, 6);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Траектория голоса за последние ~3 секунды.
+  const trail = state.pitchTrail.filter(
+    (point) => point.timeMs >= positionMs - 3000 && point.timeMs <= positionMs + 300,
+  );
+
+  if (trail.length) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(74,231,255,.92)";
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 13;
+    ctx.shadowColor = "rgba(74,231,255,.8)";
+    ctx.beginPath();
+
+    let previous = null;
+    for (const point of trail) {
+      const x = pitchX(point.timeMs, positionMs, width);
+      const y = pitchY(point.midi, minMidi, maxMidi, height);
+
+      if (!previous || point.timeMs - previous.timeMs > 550 || Math.abs(point.midi - previous.midi) > 7) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+      previous = point;
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    const latest = trail.at(-1);
+    const x = pitchX(latest.timeMs, positionMs, width);
+    const y = pitchY(latest.midi, minMidi, maxMidi, height);
+
+    ctx.save();
+    ctx.fillStyle = "#e8fcff";
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "rgba(74,231,255,1)";
+    ctx.beginPath();
+    ctx.arc(x, y, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const waiting = document.querySelector("#pitchWaiting");
+  if (waiting) {
+    waiting.classList.toggle("hidden", Boolean(guide?.ready || trail.length));
+    if (!guide?.ready && trail.length) waiting.textContent = "Слушаем голос · карта нот ещё строится";
+    else waiting.textContent = "Строим шкалу нот…";
+  }
+
+  const note = document.querySelector("#singerNote");
+  const singer = state.karaoke?.singerPitch;
+  if (note) {
+    note.textContent = singer?.note || "—";
+    note.title = singer?.hz ? `${singer.hz} Hz` : "";
+  }
+}
+
+function updateKaraokeVisuals() {
+  if (state.mode !== "karaoke" || !state.karaoke) return;
+
+  const sourceDuration = Number(state.karaoke.source?.duration) || 0;
+  const durationMs = Math.max(1, Number(state.selected?.duration || sourceDuration || 0) * 1000);
+  const positionMs = Math.min(estimatedPositionMs(), durationMs || Infinity);
+  const ratio = Math.max(0, Math.min(1, positionMs / durationMs));
+
+  const currentTime = document.querySelector("#currentTime");
+  const progressBar = document.querySelector("#progressBar");
+  if (currentTime) currentTime.textContent = formatClock(positionMs);
+  if (progressBar) progressBar.style.width = `${ratio * 100}%`;
+
+  updateRollingLyrics(positionMs);
+  captureSingerPitch();
+  drawPitchGuide(positionMs);
+
+  const overlay = document.querySelector("#countdownOverlay");
+  const countdownNumber = document.querySelector("#countdownNumber");
+  if (overlay) {
+    const left = Number(state.karaoke.countdownEndsAt || 0) - Date.now();
+    const showing = state.karaoke.status === "countdown" && left > 0;
+    overlay.classList.toggle("hidden", !showing);
+    if (showing && countdownNumber) countdownNumber.textContent = String(Math.max(1, Math.ceil(left / 1000)));
+  }
+
+  const live = state.karaoke.score?.live;
+  const liveAccuracy = document.querySelector("#liveAccuracy");
+  const liveCombo = document.querySelector("#liveCombo");
+  const liveVerdict = document.querySelector("#liveVerdict");
+  if (liveAccuracy) liveAccuracy.textContent = live ? `${live.accuracy}%` : "—%";
+  if (liveCombo) liveCombo.textContent = `×${Number(state.karaoke.score?.combo || 0)}`;
+  if (liveVerdict) {
+    liveVerdict.textContent = live?.verdict || "♪";
+    liveVerdict.dataset.verdict = live?.verdict || "";
+  }
+
+  const pause = document.querySelector("#pauseResume");
+  if (pause) {
+    pause.textContent = state.karaoke.status === "paused" ? "▶ Продолжить" : "Ⅱ Пауза";
+    pause.disabled = !["playing", "paused"].includes(state.karaoke.status);
+  }
+
+  const status = document.querySelector("#playbackStatus");
+  if (status) {
+    const labels = {
+      resolving: "Ищем аудио…",
+      countdown: "Приготовься — старт через 3 секунды",
+      buffering: "Буферизация…",
+      playing: `Играет в ${state.connectedChannel || "voice"}`,
+      paused: "Пауза",
+      finished: "Песня закончилась",
+      error: "Ошибка воспроизведения",
+      stopped: "Остановлено",
+    };
+    status.textContent = labels[state.karaoke.status] || state.karaoke.status;
+  }
+}
+
+async function pollKaraokeState() {
+  if (state.mode !== "karaoke" || !state.guildId) return;
+  try {
+    const response = await fetch(`/api/karaoke/state?guildId=${encodeURIComponent(state.guildId)}`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) return;
+
+    const oldStatus = state.karaoke?.status;
+    state.karaoke = {
+      ...state.karaoke,
+      ...data,
+      positionMs: Number(data.positionMs) || 0,
+      sampledAt: performance.now(),
+    };
+
+    if (data.channelName) state.connectedChannel = data.channelName;
+    updateKaraokeVisuals();
+
+    if (data.status === "finished" && oldStatus !== "finished") {
+      stopKaraokeLoops();
+      state.mode = "result";
+      render();
+      return;
+    }
+
+    if (data.status === "error" && oldStatus !== "error") {
+      const status = document.querySelector("#playbackStatus");
+      if (status) status.textContent = errorMessage(data.error || "AUDIO_PLAYER_ERROR");
+    }
+  } catch (error) {
+    console.debug("karaoke state poll", error);
+  }
+}
+
+function startKaraokeLoops() {
+  stopKaraokeLoops();
+  state.pollTimer = setInterval(pollKaraokeState, 250);
+  state.visualTimer = setInterval(updateKaraokeVisuals, 50);
+}
+
+function stopKaraokeLoops() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.visualTimer) clearInterval(state.visualTimer);
+  state.pollTimer = null;
+  state.visualTimer = null;
+}
+
+async function karaokeControl(action) {
+  const response = await fetch(`/api/karaoke/${action}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ guildId: state.guildId }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `KARAOKE_${action.toUpperCase()}_FAILED`);
+  state.karaoke = {
+    ...state.karaoke,
+    ...data,
+    positionMs: Number(data.positionMs) || 0,
+    sampledAt: performance.now(),
+  };
+  updateKaraokeVisuals();
+}
+
+async function togglePause() {
+  try {
+    await karaokeControl(state.karaoke?.status === "paused" ? "resume" : "pause");
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function stopCurrentKaraoke() {
+  try {
+    await karaokeControl("stop");
+  } catch (error) {
+    console.error(error);
+  } finally {
+    stopKaraokeLoops();
+    if (state.karaoke?.score?.result) {
+      state.mode = "result";
+      render();
+    } else {
+      state.mode = "library";
+      render();
+      statusMessage("Караоке остановлено. Бот остался в голосовом канале.", "info");
+    }
+  }
+}
+
+async function initDiscord() {
+  app.innerHTML = `<div class="boot"><div class="spinner"></div><strong>Запускаем караоке…</strong><span>Подключаемся к Discord</span></div>`;
+
+  const configResponse = await fetch("/api/config");
+  const config = await configResponse.json();
+
+  state.sdk = new DiscordSDK(config.clientId);
+  await state.sdk.ready();
+  state.guildId = state.sdk.guildId;
+  state.channelId = state.sdk.channelId;
+
+  const { code } = await state.sdk.commands.authorize({
+    client_id: config.clientId,
+    response_type: "code",
+    state: "",
+    prompt: "none",
+    scope: ["identify", "guilds", "applications.commands"],
+  });
+
+  const tokenResponse = await fetch("/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const tokenData = await tokenResponse.json();
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    throw new Error(tokenData.error || "TOKEN_EXCHANGE_FAILED");
+  }
+
+  state.accessToken = tokenData.access_token;
+  state.auth = await state.sdk.commands.authenticate({ access_token: state.accessToken });
+  if (!state.auth) throw new Error("DISCORD_AUTH_FAILED");
+
+  render();
+}
+
+initDiscord().catch(async (error) => {
+  console.error(error);
+  await sleep(250);
+  app.innerHTML = `
+    <div class="fatal">
+      <div class="fatal-icon">!</div>
+      <h1>Activity не смогла запуститься</h1>
+      <p>${escapeHtml(error.message)}</p>
+      <div class="fatal-help">
+        Открывай эту страницу именно через Discord Activity. Если ошибка про Client Secret — добавь его в переменные Bothost.
+      </div>
+    </div>
+  `;
+});
