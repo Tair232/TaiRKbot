@@ -233,3 +233,142 @@ kbd { color:#777986; border:1px solid var(--line); padding:4px 7px; border-radiu
   .result-actions { flex-direction:column; }
   .result-button { width:100%; }
 }
+
+
+/* === 0.4 · Smule-like note highway === */
+.pitch-guide-card {
+  position: relative;
+  z-index: 2;
+  width: min(980px, 100%);
+  margin: 24px auto 4px;
+  border: 1px solid rgba(255,255,255,.085);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 72% 10%, rgba(97,207,255,.08), transparent 36%),
+    linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.pitch-guide-head {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 15px 8px;
+  border-bottom: 1px solid rgba(255,255,255,.055);
+}
+.pitch-guide-head > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.pitch-kicker {
+  color: #777986;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .13em;
+}
+#singerNote {
+  font-size: 20px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.pitch-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #858793;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+.pitch-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pitch-legend i {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+.legend-target {
+  width: 20px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(170,111,246,.85);
+  box-shadow: 0 0 12px rgba(170,111,246,.35);
+}
+.legend-voice {
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+  background: #4ae7ff;
+  box-shadow: 0 0 10px rgba(74,231,255,.7);
+}
+.pitch-canvas-wrap {
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.018), transparent 22%, transparent 78%, rgba(255,255,255,.012)),
+    rgba(4,5,9,.28);
+}
+.pitch-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pitch-playhead {
+  position: absolute;
+  left: 27%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  pointer-events: none;
+}
+.pitch-playhead i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: linear-gradient(180deg, transparent 0, rgba(255,255,255,.28) 11%, rgba(255,255,255,.82) 47%, rgba(255,255,255,.28) 89%, transparent);
+  box-shadow: 0 0 18px rgba(255,255,255,.18);
+}
+.pitch-playhead span {
+  position: absolute;
+  top: 9px;
+  left: 7px;
+  color: rgba(255,255,255,.38);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .12em;
+}
+.pitch-waiting {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255,255,255,.34);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+.pitch-waiting.hidden {
+  opacity: 0;
+}
+
+@media (max-width: 720px) {
+  .pitch-guide-card { margin-top: 16px; border-radius: 16px; }
+  .pitch-canvas-wrap { height: 178px; }
+  .pitch-guide-head { padding-inline: 11px; }
+  .pitch-legend { gap: 8px; font-size: 8px; }
+  .pitch-kicker { display: none; }
+  #singerNote { font-size: 18px; }
+}
+
+@media (max-width: 480px) {
+  .pitch-legend span:first-child { display: none; }
+  .pitch-canvas-wrap { height: 158px; }
+}
