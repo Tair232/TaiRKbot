@@ -18,6 +18,9 @@ const state = {
   pollTimer: null,
   visualTimer: null,
   activeLyricIndex: -999,
+  pitchTrail: [],
+  lastSingerPitchSeq: 0,
+  pitchRange: { min: 48, max: 72 },
 };
 
 const popular = [
@@ -382,6 +385,9 @@ async function startSelectedKaraoke() {
     state.connectedChannel = data.channelName || state.connectedChannel;
     state.lyricMap = parseSyncedLyrics(state.selected.syncedLyrics);
     state.activeLyricIndex = -999;
+    state.pitchTrail = [];
+    state.lastSingerPitchSeq = 0;
+    state.pitchRange = { min: 48, max: 72 };
     state.karaoke = {
       ...data,
       positionMs: Number(data.positionMs) || 0,
@@ -458,6 +464,27 @@ function renderKaraoke() {
           <div class="eyebrow">СЕЙЧАС ИГРАЕТ</div>
           <h1>${escapeHtml(track.title)}</h1>
           <p>${escapeHtml(track.artist)}</p>
+        </div>
+
+        <div class="pitch-guide-card">
+          <div class="pitch-guide-head">
+            <div>
+              <span class="pitch-kicker">ВЫСОТА ГОЛОСА</span>
+              <strong id="singerNote">—</strong>
+            </div>
+            <div class="pitch-legend">
+              <span><i class="legend-target"></i> НОТЫ ПЕСНИ</span>
+              <span><i class="legend-voice"></i> ТВОЙ ГОЛОС</span>
+            </div>
+          </div>
+          <div class="pitch-canvas-wrap">
+            <canvas id="pitchCanvas" class="pitch-canvas"></canvas>
+            <div class="pitch-playhead">
+              <i></i>
+              <span>СЕЙЧАС</span>
+            </div>
+            <div id="pitchWaiting" class="pitch-waiting">Строим шкалу нот…</div>
+          </div>
         </div>
 
         <div class="lyrics-stage ${state.lyricMap.length ? "synced" : "no-sync"}">
@@ -630,6 +657,234 @@ function updateRollingLyrics(positionMs) {
   }
 }
 
+
+function midiToNoteName(value) {
+  if (!Number.isFinite(value)) return "—";
+  const midi = Math.round(value);
+  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+function captureSingerPitch() {
+  const sample = state.karaoke?.singerPitch;
+  if (!sample?.seq || sample.seq === state.lastSingerPitchSeq) return;
+  state.lastSingerPitchSeq = sample.seq;
+
+  if (!Number.isFinite(Number(sample.midi))) return;
+  state.pitchTrail.push({
+    seq: Number(sample.seq),
+    timeMs: Number(sample.positionMs) || estimatedPositionMs(),
+    midi: Number(sample.midi),
+    confidence: Number(sample.confidence) || 0,
+  });
+
+  const now = estimatedPositionMs();
+  state.pitchTrail = state.pitchTrail.filter((point) => point.timeMs >= now - 3200);
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, Math.abs(width) / 2, Math.abs(height) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function pitchX(timeMs, positionMs, width) {
+  const playheadX = width * 0.27;
+  const delta = timeMs - positionMs;
+  if (delta < 0) return playheadX + (delta / 2300) * playheadX;
+  return playheadX + (delta / 6200) * (width - playheadX);
+}
+
+function desiredPitchRange(segments, trail) {
+  const values = [];
+  for (const segment of segments || []) {
+    if (Number.isFinite(Number(segment.midi))) values.push(Number(segment.midi));
+  }
+  for (const point of trail || []) {
+    if (Number.isFinite(Number(point.midi))) values.push(Number(point.midi));
+  }
+
+  if (!values.length) return state.pitchRange;
+
+  let min = Math.floor(Math.min(...values)) - 2;
+  let max = Math.ceil(Math.max(...values)) + 2;
+  const center = (min + max) / 2;
+
+  if (max - min < 12) {
+    min = center - 6;
+    max = center + 6;
+  }
+  if (max - min > 25) {
+    min = center - 12.5;
+    max = center + 12.5;
+  }
+
+  return {
+    min: Math.max(28, min),
+    max: Math.min(98, max),
+  };
+}
+
+function pitchY(midi, minMidi, maxMidi, height) {
+  const pad = 18;
+  const usable = Math.max(1, height - pad * 2);
+  const ratio = (midi - minMidi) / Math.max(1, maxMidi - minMidi);
+  return height - pad - Math.max(0, Math.min(1, ratio)) * usable;
+}
+
+function drawPitchGuide(positionMs) {
+  const canvas = document.querySelector("#pitchCanvas");
+  if (!canvas) return;
+
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(bounds.width));
+  const height = Math.max(1, Math.round(bounds.height));
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+  const pixelW = Math.round(width * dpr);
+  const pixelH = Math.round(height * dpr);
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const guide = state.karaoke?.noteGuide;
+  const segments = guide?.segments || [];
+
+  const targetRange = desiredPitchRange(segments, state.pitchTrail);
+  state.pitchRange.min += (targetRange.min - state.pitchRange.min) * 0.12;
+  state.pitchRange.max += (targetRange.max - state.pitchRange.max) * 0.12;
+
+  const minMidi = state.pitchRange.min;
+  const maxMidi = state.pitchRange.max;
+
+  // Тонкая нотная сетка.
+  const firstMidi = Math.floor(minMidi);
+  const lastMidi = Math.ceil(maxMidi);
+  ctx.font = "700 9px Inter, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+
+  for (let midi = firstMidi; midi <= lastMidi; midi += 1) {
+    const y = pitchY(midi, minMidi, maxMidi, height);
+    const isC = ((midi % 12) + 12) % 12 === 0;
+
+    ctx.strokeStyle = isC ? "rgba(255,255,255,.105)" : "rgba(255,255,255,.035)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y) + 0.5);
+    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.stroke();
+
+    if (isC) {
+      ctx.fillStyle = "rgba(255,255,255,.28)";
+      ctx.fillText(midiToNoteName(midi), 8, y - 7);
+    }
+  }
+
+  // Ноты песни едут справа налево относительно фиксированного playhead.
+  for (const segment of segments) {
+    const x1 = pitchX(Number(segment.startMs), positionMs, width);
+    const x2 = pitchX(Number(segment.endMs), positionMs, width);
+    if (x2 < -20 || x1 > width + 20) continue;
+
+    const y = pitchY(Number(segment.midi), minMidi, maxMidi, height);
+    const barH = 12;
+    const isActive =
+      Number(segment.startMs) <= positionMs &&
+      Number(segment.endMs) >= positionMs;
+    const passed = Number(segment.endMs) < positionMs;
+
+    const left = Math.max(-10, x1);
+    const barW = Math.max(8, x2 - x1);
+
+    ctx.save();
+    if (isActive) {
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = "rgba(177,117,255,.82)";
+      ctx.fillStyle = "rgba(210,181,255,.98)";
+    } else if (passed) {
+      ctx.fillStyle = "rgba(138,101,196,.28)";
+    } else {
+      ctx.fillStyle = "rgba(159,104,239,.72)";
+    }
+
+    roundedRect(ctx, left, y - barH / 2, barW, barH, 6);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Траектория голоса за последние ~3 секунды.
+  const trail = state.pitchTrail.filter(
+    (point) => point.timeMs >= positionMs - 3000 && point.timeMs <= positionMs + 300,
+  );
+
+  if (trail.length) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(74,231,255,.92)";
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 13;
+    ctx.shadowColor = "rgba(74,231,255,.8)";
+    ctx.beginPath();
+
+    let previous = null;
+    for (const point of trail) {
+      const x = pitchX(point.timeMs, positionMs, width);
+      const y = pitchY(point.midi, minMidi, maxMidi, height);
+
+      if (!previous || point.timeMs - previous.timeMs > 550 || Math.abs(point.midi - previous.midi) > 7) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+      previous = point;
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    const latest = trail.at(-1);
+    const x = pitchX(latest.timeMs, positionMs, width);
+    const y = pitchY(latest.midi, minMidi, maxMidi, height);
+
+    ctx.save();
+    ctx.fillStyle = "#e8fcff";
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "rgba(74,231,255,1)";
+    ctx.beginPath();
+    ctx.arc(x, y, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const waiting = document.querySelector("#pitchWaiting");
+  if (waiting) {
+    waiting.classList.toggle("hidden", Boolean(guide?.ready || trail.length));
+    if (!guide?.ready && trail.length) waiting.textContent = "Слушаем голос · карта нот ещё строится";
+    else waiting.textContent = "Строим шкалу нот…";
+  }
+
+  const note = document.querySelector("#singerNote");
+  const singer = state.karaoke?.singerPitch;
+  if (note) {
+    note.textContent = singer?.note || "—";
+    note.title = singer?.hz ? `${singer.hz} Hz` : "";
+  }
+}
+
 function updateKaraokeVisuals() {
   if (state.mode !== "karaoke" || !state.karaoke) return;
 
@@ -644,6 +899,8 @@ function updateKaraokeVisuals() {
   if (progressBar) progressBar.style.width = `${ratio * 100}%`;
 
   updateRollingLyrics(positionMs);
+  captureSingerPitch();
+  drawPitchGuide(positionMs);
 
   const overlay = document.querySelector("#countdownOverlay");
   const countdownNumber = document.querySelector("#countdownNumber");
@@ -723,8 +980,8 @@ async function pollKaraokeState() {
 
 function startKaraokeLoops() {
   stopKaraokeLoops();
-  state.pollTimer = setInterval(pollKaraokeState, 1000);
-  state.visualTimer = setInterval(updateKaraokeVisuals, 100);
+  state.pollTimer = setInterval(pollKaraokeState, 250);
+  state.visualTimer = setInterval(updateKaraokeVisuals, 50);
 }
 
 function stopKaraokeLoops() {
