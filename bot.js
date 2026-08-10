@@ -20,6 +20,40 @@ const token =
 const COUNTDOWN_MS = 3000;
 const SINGER_COLORS = ["#a970ff", "#45d9ff", "#ff9d4d", "#5ee08b"];
 
+export const ALLOWED_GUILD_IDS = new Set([
+  "1492151172570808390",
+  "1408910162579816571",
+]);
+
+export const ALLOWED_VOICE_CHANNEL_IDS = new Set([
+  "1408910163238457489",
+  "1536348043081949357",
+]);
+
+function assertAllowedGuild(guildId) {
+  if (!ALLOWED_GUILD_IDS.has(String(guildId))) {
+    throw new Error("GUILD_NOT_ALLOWED");
+  }
+}
+
+function assertAllowedVoice(channelId) {
+  if (!ALLOWED_VOICE_CHANNEL_IDS.has(String(channelId))) {
+    throw new Error("VOICE_NOT_ALLOWED");
+  }
+}
+
+async function leaveUnauthorizedGuilds() {
+  for (const guild of bot.guilds.cache.values()) {
+    if (ALLOWED_GUILD_IDS.has(guild.id)) continue;
+    try {
+      console.log(`[BOT] Покидаю неразрешённый сервер: ${guild.name} (${guild.id})`);
+      await guild.leave();
+    } catch (error) {
+      console.warn(`[BOT] Не удалось покинуть сервер ${guild.id}:`, error?.message || error);
+    }
+  }
+}
+
 export const bot = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
@@ -37,9 +71,10 @@ export async function startBot() {
   if (loginPromise) return loginPromise;
 
   loginPromise = new Promise((resolve, reject) => {
-    bot.once("clientReady", () => {
+    bot.once("clientReady", async () => {
       bot.user.setActivity("Русское караоке 🎤", { type: ActivityType.Playing });
       console.log(`[BOT] Вошёл как ${bot.user.tag}`);
+      await leaveUnauthorizedGuilds();
       resolve(true);
     });
     bot.login(token).catch(reject);
@@ -60,6 +95,8 @@ function userLabel(memberOrUser) {
 }
 
 function roomFor(guildId) {
+  assertAllowedGuild(guildId);
+
   let room = rooms.get(guildId);
   if (room) return room;
 
@@ -348,12 +385,16 @@ export function getBotState() {
 async function guildAndVoiceMember(guildId, userId) {
   if (!bot.isReady()) throw new Error("BOT_NOT_READY");
 
+  assertAllowedGuild(guildId);
+
   const guild = bot.guilds.cache.get(guildId);
   if (!guild) throw new Error("GUILD_NOT_FOUND");
 
   const voiceState = guild.voiceStates.cache.get(userId);
   const channel = voiceState?.channel;
   if (!channel) throw new Error("USER_NOT_IN_VOICE");
+
+  assertAllowedVoice(channel.id);
 
   return { guild, voiceState, channel };
 }
@@ -749,6 +790,18 @@ export function leaveVoiceChannel(guildId, userId) {
   connection.destroy();
   return true;
 }
+
+
+bot.on("guildCreate", async (guild) => {
+  if (ALLOWED_GUILD_IDS.has(guild.id)) return;
+
+  console.log(`[BOT] Добавили на неразрешённый сервер ${guild.name} (${guild.id}) — выхожу.`);
+  try {
+    await guild.leave();
+  } catch (error) {
+    console.warn(`[BOT] Не удалось покинуть сервер ${guild.id}:`, error?.message || error);
+  }
+});
 
 bot.on("voiceStateUpdate", (oldState, newState) => {
   const userId = oldState.id;
