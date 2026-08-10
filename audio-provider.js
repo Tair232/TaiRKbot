@@ -210,9 +210,8 @@ function killProcess(child) {
   }
 }
 
-async function createOggOpusStream(videoId) {
+async function createAudioStreams(videoId) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
-
   const ytErr = makeTailCollector();
   const ffErr = makeTailCollector();
 
@@ -231,20 +230,13 @@ async function createOggOpusStream(videoId) {
       "-",
       url,
     ],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+    { stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  /*
-   * ВАЖНО:
-   * Раньше здесь FFmpeg отдавал raw PCM (s16le).
-   * Тогда @discordjs/voice должен был сам кодировать PCM -> Opus,
-   * из-за чего требовался @discordjs/opus/opusscript.
-   *
-   * Теперь FFmpeg сам кодирует звук в Opus и заворачивает его в Ogg.
-   * Discord.js только демультиплексирует готовые Opus-пакеты.
-   */
+  // Один FFmpeg делает сразу две дорожки:
+  // 1) готовый Ogg/Opus для Discord;
+  // 2) mono PCM 16 kHz для построения приблизительной pitch-карты.
+  // Для reference немного усиливаем центр стерео, где обычно находится вокал.
   const ffmpeg = spawn(
     "ffmpeg",
     [
@@ -253,6 +245,10 @@ async function createOggOpusStream(videoId) {
       "error",
       "-i",
       "pipe:0",
+      "-filter_complex",
+      "[0:a]asplit=2[play][ref0];[ref0]pan=mono|c0=0.5*c0+0.5*c1,highpass=f=75,lowpass=f=1200[ref]",
+      "-map",
+      "[play]",
       "-vn",
       "-ac",
       "2",
@@ -269,18 +265,23 @@ async function createOggOpusStream(videoId) {
       "-f",
       "ogg",
       "pipe:1",
+      "-map",
+      "[ref]",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-f",
+      "s16le",
+      "pipe:3",
     ],
-    {
-      stdio: ["pipe", "pipe", "pipe"],
-    },
+    { stdio: ["pipe", "pipe", "pipe", "pipe"] },
   );
 
   downloader.stderr.on("data", (chunk) => ytErr.push(chunk));
   ffmpeg.stderr.on("data", (chunk) => ffErr.push(chunk));
-
   ffmpeg.stdin.on("error", () => {});
   downloader.stdout.on("error", () => {});
-
   downloader.stdout.pipe(ffmpeg.stdin);
 
   const cleanup = () => {
@@ -293,7 +294,6 @@ async function createOggOpusStream(videoId) {
 
   await new Promise((resolve, reject) => {
     let settled = false;
-
     const done = (fn, value) => {
       if (settled) return;
       settled = true;
@@ -313,26 +313,18 @@ async function createOggOpusStream(videoId) {
     };
 
     const onReadable = () => done(resolve);
-
     const onDownloaderExit = (code, signal) => {
       if (code === 0) return;
-
       fail(
         "AUDIO_DOWNLOAD_FAILED",
-        new Error(
-          `yt-dlp exit=${code} signal=${signal || "-"}\n${ytErr.get()}`,
-        ),
+        new Error(`yt-dlp exit=${code} signal=${signal || "-"}\n${ytErr.get()}`),
       );
     };
-
     const onFfmpegExit = (code, signal) => {
       if (code === 0) return;
-
       fail(
         "AUDIO_TRANSCODE_FAILED",
-        new Error(
-          `ffmpeg exit=${code} signal=${signal || "-"}\n${ffErr.get()}`,
-        ),
+        new Error(`ffmpeg exit=${code} signal=${signal || "-"}\n${ffErr.get()}`),
       );
     };
 
@@ -343,14 +335,15 @@ async function createOggOpusStream(videoId) {
     const timer = setTimeout(() => {
       fail(
         "AUDIO_START_TIMEOUT",
-        new Error(
-          `Не получили аудио за 30 секунд.\nyt-dlp: ${ytErr.get()}\nffmpeg: ${ffErr.get()}`,
-        ),
+        new Error(`Не получили аудио за 30 секунд.\nyt-dlp: ${ytErr.get()}\nffmpeg: ${ffErr.get()}`),
       );
     }, 30_000);
   });
 
-  return ffmpeg.stdout;
+  return {
+    stream: ffmpeg.stdout,
+    referencePcm: ffmpeg.stdio[3],
+  };
 }
 
 export async function resolveAudio(track) {
@@ -359,12 +352,11 @@ export async function resolveAudio(track) {
   }
 
   const candidate = await findBestCandidate(track);
-  const stream = await createOggOpusStream(candidate.videoId);
+  const streams = await createAudioStreams(candidate.videoId);
 
   return {
-    stream,
-
-    // Ключевой фикс: это уже готовый Opus в Ogg, а НЕ raw PCM.
+    stream: streams.stream,
+    referencePcm: streams.referencePcm,
     inputType: StreamType.OggOpus,
 
     source: {
