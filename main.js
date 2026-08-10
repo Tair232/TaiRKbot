@@ -9,28 +9,36 @@ const state = {
   accessToken: null,
   guildId: null,
   channelId: null,
-  selected: null,
+
+  query: "",
   results: [],
-  connectedChannel: null,
+  selected: null,
+  searching: false,
+
+  room: {
+    current: null,
+    queue: [],
+    myInvites: [],
+    myDrafts: [],
+  },
+
   mode: "library",
-  karaoke: null,
-  lyricMap: [],
-  pollTimer: null,
-  visualTimer: null,
+  watchingCurrent: false,
   activeLyricIndex: -999,
-  pitchTrail: [],
-  lastSingerPitchSeq: 0,
-  pitchRange: { min: 48, max: 72 },
+
+  roomPoll: null,
+  visualTimer: null,
+  searchTimer: null,
 };
 
 const popular = [
   "Кино",
   "Король и Шут",
+  "Дайте танк (!)",
+  "Три дня дождя",
   "Сектор Газа",
   "Ария",
   "Кипелов",
-  "Три дня дождя",
-  "Дайте танк (!)",
   "Молчат Дома",
 ];
 
@@ -59,51 +67,6 @@ function formatClock(ms) {
   return `${min}:${sec}`;
 }
 
-function firstLyricsLines(track) {
-  const source = track.syncedLyrics || track.plainLyrics || "";
-  return source
-    .split("\n")
-    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
-    .filter(Boolean)
-    .slice(0, 5);
-}
-
-function parseSyncedLyrics(source = "") {
-  return String(source)
-    .split("\n")
-    .map((line) => {
-      const match = line.match(/^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$/);
-      if (!match) return null;
-
-      const minutes = Number(match[1]);
-      const seconds = Number(match[2]);
-      const fractionRaw = match[3] || "0";
-      const fractionMs = Number(fractionRaw.padEnd(3, "0").slice(0, 3));
-      const text = match[4].trim();
-
-      return {
-        timeMs: (minutes * 60 + seconds) * 1000 + fractionMs,
-        text: text || "♪",
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.timeMs - b.timeMs);
-}
-
-function plainLyricsLines(source = "") {
-  return String(source)
-    .split("\n")
-    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
-    .filter(Boolean);
-}
-
-function statusMessage(text, type = "info") {
-  const el = document.querySelector("#status");
-  if (!el) return;
-  el.textContent = text;
-  el.dataset.type = type;
-}
-
 function authHeaders() {
   return {
     "Content-Type": "application/json",
@@ -111,28 +74,112 @@ function authHeaders() {
   };
 }
 
+function me() {
+  return state.auth?.user || null;
+}
+
+function myId() {
+  return me()?.id || "";
+}
+
+function currentOwnedByMe() {
+  return state.room.current?.owner?.id === myId();
+}
+
 function errorMessage(code) {
   const messages = {
     USER_NOT_IN_VOICE: "Сначала зайди в голосовой канал.",
     CHANNEL_NOT_JOINABLE: "Бот не может подключиться к этому каналу.",
     CHANNEL_NOT_SPEAKABLE: "У бота нет права «Говорить» в этом канале.",
-    BOT_NOT_READY: "Бот ещё не вошёл в Discord. Проверь токен на Bothost.",
+    BOT_NOT_READY: "Бот ещё не вошёл в Discord.",
     GUILD_NOT_FOUND: "Бота нет на этом сервере Discord.",
-    VOICE_CONNECTION_FAILED: "Не удалось установить voice-соединение.",
-    AUDIO_NOT_FOUND: "Не удалось найти подходящую запись этой песни.",
-    AUDIO_STREAM_FAILED: "Нашли песню, но не удалось получить аудиопоток.",
-    AUDIO_PLAYER_ERROR: "Discord не смог воспроизвести аудиопоток.",
-    TRACK_INVALID: "Некорректные данные песни.",
+    VOICE_CONNECTION_FAILED: "Не удалось подключиться к voice.",
+    AUDIO_NOT_FOUND: "Не удалось найти подходящее аудио.",
+    AUDIO_SEARCH_FAILED: "YouTube-поиск временно не сработал.",
+    AUDIO_DOWNLOAD_FAILED: "Не удалось получить аудиопоток.",
+    AUDIO_TRANSCODE_FAILED: "FFmpeg не смог подготовить аудио.",
+    USER_QUEUE_LIMIT: "У тебя уже есть одна песня в очереди.",
+    NOT_SONG_OWNER: "Управлять этой песней может только тот, кто её поставил.",
+    DUET_DRAFT_EXISTS: "У тебя уже есть незавершённый дуо-инвайт.",
+    DUET_INVITE_REQUIRED: "Выбери хотя бы одного человека.",
+    INVITEE_NOT_IN_VOICE: "Кто-то из приглашённых уже вышел из voice.",
+    DUET_NEEDS_ACCEPTED: "Нужно, чтобы хотя бы один человек принял инвайт.",
+    DUET_DRAFT_NOT_FOUND: "Этот инвайт уже не существует.",
+    DUET_NOT_INVITED: "Этот инвайт предназначен другому человеку.",
   };
   return messages[code] || `Ошибка: ${code}`;
 }
 
-function render() {
-  if (state.mode === "result" && state.selected) {
-    renderResult();
-    return;
+function toast(text, type = "info") {
+  let box = document.querySelector("#toast");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "toast";
+    document.body.appendChild(box);
   }
-  if (state.mode === "karaoke" && state.selected) {
+  box.textContent = text;
+  box.dataset.type = type;
+  box.classList.add("show");
+  clearTimeout(box._timer);
+  box._timer = setTimeout(() => box.classList.remove("show"), 2600);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      Authorization: `Bearer ${state.accessToken}`,
+      ...(options.headers || {}),
+    },
+    cache: "no-store",
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP_${response.status}`);
+  return data;
+}
+
+function trackPayload(track) {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    duration: track.duration,
+    instrumental: track.instrumental,
+    plainLyrics: track.plainLyrics,
+    syncedLyrics: track.syncedLyrics,
+  };
+}
+
+function firstLyricsLines(track) {
+  return String(track?.syncedLyrics || track?.plainLyrics || "")
+    .split("\n")
+    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function avatarHtml(user) {
+  if (user?.avatar && user?.id) {
+    return `<img src="https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64" alt="">`;
+  }
+  return `<span>${escapeHtml((user?.global_name || user?.username || "?").slice(0, 1))}</span>`;
+}
+
+function singerDots(singers = []) {
+  if (!singers.length) return "";
+  return `
+    <div class="singer-dots">
+      ${singers.map((s) => `<i style="--dot:${escapeHtml(s.color || "#999")}" title="${escapeHtml(s.name)}"></i>`).join("")}
+      <span>${singers.map((s) => escapeHtml(s.name)).join(" · ")}</span>
+    </div>
+  `;
+}
+
+function render() {
+  if (state.mode === "karaoke" && state.room.current) {
     renderKaraoke();
     return;
   }
@@ -140,7 +187,12 @@ function render() {
 }
 
 function renderLibrary() {
-  const user = state.auth?.user;
+  const user = me();
+  const current = state.room.current;
+  const queue = state.room.queue || [];
+  const invites = state.room.myInvites || [];
+  const drafts = state.room.myDrafts || [];
+
   app.innerHTML = `
     <main class="shell">
       <header class="topbar">
@@ -152,59 +204,112 @@ function renderLibrary() {
           </div>
         </div>
         <div class="user-chip">
-          ${user?.avatar ? `<img src="https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64" alt="">` : `<div class="avatar-fallback">${escapeHtml(user?.username?.[0] || "?")}</div>`}
+          <div class="avatar">${avatarHtml(user)}</div>
           <span>${escapeHtml(user?.global_name || user?.username || "Discord")}</span>
         </div>
       </header>
 
+      ${invites.length ? `
+        <section class="invite-stack">
+          ${invites.map(inviteCard).join("")}
+        </section>
+      ` : ""}
+
+      ${current ? `
+        <section class="now-live">
+          <div class="live-pulse"></div>
+          <div class="now-live-main">
+            <small>СЕЙЧАС ПОЮТ</small>
+            <strong>${escapeHtml(current.track.title)}</strong>
+            <span>${escapeHtml(current.track.artist)} · поставил ${escapeHtml(current.owner.name)}</span>
+            ${singerDots(current.singers)}
+          </div>
+          <button id="followCurrent" class="primary compact">Следить за текстом</button>
+        </section>
+      ` : ""}
+
       <section class="hero">
-        <div class="eyebrow">РУССКОЕ КАРАОКЕ</div>
+        <div class="eyebrow">ПОИСК ПЕСЕН</div>
         <h1>Что будем петь?</h1>
-        <p>Найди песню или исполнителя. Синхронный текст ставим выше в выдаче.</p>
+        <p>Ищи как на YouTube: название, исполнителя, часть фразы или даже транслитом.</p>
+
         <label class="searchbox">
           <span>⌕</span>
-          <input id="search" autocomplete="off" placeholder="Например: Кино — Группа крови" />
-          <kbd>Enter</kbd>
+          <input id="search" autocomplete="off" value="${escapeHtml(state.query)}" placeholder="Кино группа крови, kishlak, три дня дождя..." />
+          ${state.searching ? `<i class="tiny-spinner"></i>` : `<kbd>Enter</kbd>`}
         </label>
+
         <div class="chips">
           ${popular.map((name) => `<button class="chip" data-search="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
         </div>
       </section>
 
-      <div id="status" class="status" data-type="info">Готово к поиску</div>
-
-      <section class="content-grid">
+      <section class="library-layout">
         <div class="results-panel">
           <div class="section-title">
-            <span>${state.results.length ? "Результаты" : "Популярное"}</span>
-            <small>${state.results.length ? `${state.results.length} вариантов` : "нажми исполнителя выше"}</small>
+            <span>${state.query ? `Результаты по «${escapeHtml(state.query)}»` : "Поиск"}</span>
+            <small>${state.results.length ? `${state.results.length} вариантов` : "начни вводить название"}</small>
           </div>
-          <div id="results" class="results">
-            ${state.results.length ? state.results.map(trackCard).join("") : emptyState()}
+          <div class="results">
+            ${state.results.length
+              ? state.results.map(trackCard).join("")
+              : `<div class="empty"><div>♫</div><strong>Пиши что угодно</strong><span>Поиск запускается прямо во время ввода.</span></div>`}
           </div>
         </div>
 
-        <aside class="now-panel">
-          ${state.selected ? selectedCard(state.selected) : `
-            <div class="vinyl">♪</div>
-            <h2>Песня не выбрана</h2>
-            <p>Найди трек слева — здесь появятся текст и кнопка запуска караоке.</p>
-          `}
+        <aside class="side-column">
+          <section class="side-card selected-card">
+            ${state.selected ? selectedMarkup(state.selected) : `
+              <div class="vinyl">♪</div>
+              <h2>Песня не выбрана</h2>
+              <p>Нажми на результат поиска — здесь появятся кнопки соло и дуо.</p>
+            `}
+          </section>
+
+          ${drafts.length ? `
+            <section class="side-card">
+              <div class="side-heading">
+                <strong>Дуо-инвайт</strong>
+                <span>ждём ответы</span>
+              </div>
+              ${drafts.map(draftMarkup).join("")}
+            </section>
+          ` : ""}
+
+          <section class="side-card queue-card">
+            <div class="side-heading">
+              <strong>Очередь</strong>
+              <span>${queue.length ? `${queue.length} пес.` : "пусто"}</span>
+            </div>
+            ${queue.length
+              ? queue.map(queueMarkup).join("")
+              : `<div class="queue-empty">Следующая песня появится здесь.</div>`}
+          </section>
         </aside>
       </section>
     </main>
+
+    <div id="modalRoot"></div>
   `;
 
-  bindLibraryEvents();
+  bindLibrary();
 }
 
-function emptyState() {
+function inviteCard(draft) {
+  const invited = draft.participants.find((p) => p.id === myId());
   return `
-    <div class="empty">
-      <div class="empty-icon">♫</div>
-      <strong>Начни с поиска</strong>
-      <span>Мы используем LRCLIB и отдаём приоритет кириллице и синхронному тексту.</span>
-    </div>
+    <article class="invite-card">
+      <div class="invite-icon">🎤</div>
+      <div>
+        <small>ИНВАЙТ В ДУО</small>
+        <strong>${escapeHtml(draft.owner.name)} зовёт тебя петь</strong>
+        <span>${escapeHtml(draft.track.artist)} — ${escapeHtml(draft.track.title)}</span>
+      </div>
+      <div class="invite-actions">
+        <button class="primary compact" data-invite-accept="${draft.id}">Принять</button>
+        <button class="secondary compact" data-invite-decline="${draft.id}">Отказаться</button>
+      </div>
+    </article>
   `;
 }
 
@@ -215,10 +320,9 @@ function trackCard(track) {
       <div class="cover"><span>♪</span></div>
       <div class="track-main">
         <strong>${escapeHtml(track.title)}</strong>
-        <span>${escapeHtml(track.artist)}</span>
+        <span>${escapeHtml(track.artist)}${track.album ? ` · ${escapeHtml(track.album)}` : ""}</span>
         <div class="badges">
-          ${track.hasSyncedLyrics ? `<em>● Синхронный текст</em>` : track.hasLyrics ? `<em>Текст</em>` : `<em class="muted">Без текста</em>`}
-          ${track.instrumental ? `<em>Инструментал</em>` : ""}
+          ${track.hasSyncedLyrics ? `<em>● синхронный текст</em>` : track.hasLyrics ? `<em>текст</em>` : `<em class="muted">без текста</em>`}
         </div>
       </div>
       <div class="duration">${formatDuration(track.duration)}</div>
@@ -227,7 +331,7 @@ function trackCard(track) {
   `;
 }
 
-function selectedCard(track) {
+function selectedMarkup(track) {
   const lines = firstLyricsLines(track);
   return `
     <div class="selected-head">
@@ -240,393 +344,463 @@ function selectedCard(track) {
     </div>
 
     <div class="lyrics-preview">
-      ${lines.length ? lines.map((line, i) => `<div class="lyric-line ${i === 1 ? "active" : ""}">${escapeHtml(line)}</div>`).join("") : `<div class="lyric-line muted-line">Для этой версии текста пока нет.</div>`}
+      ${lines.length
+        ? lines.map((line, i) => `<div class="${i === 1 ? "active" : ""}">${escapeHtml(line)}</div>`).join("")
+        : `<div class="muted-line">Текста нет — музыка всё равно может играть.</div>`}
     </div>
 
-    <div class="voice-card">
-      <div>
-        <strong>${state.connectedChannel ? `Подключено: ${escapeHtml(state.connectedChannel)}` : "Голосовой канал"}</strong>
-        <span>${state.connectedChannel ? "Бот уже в твоём канале" : "Можно подключить заранее или просто нажать «Начать петь»"}</span>
-      </div>
-      ${state.connectedChannel
-        ? `<button id="leaveVoice" class="secondary">Отключить</button>`
-        : `<button id="joinVoice" class="primary">Подключить</button>`}
+    <div class="sing-actions">
+      <button id="singSolo" class="sing-button">
+        <span>🎙</span>
+        <div><strong>Спеть одному</strong><small>${state.room.current ? "добавится в очередь" : "начать сейчас"}</small></div>
+      </button>
+      <button id="openDuet" class="sing-button alt">
+        <span>👥</span>
+        <div><strong>Дуо / группа</strong><small>до 4 человек · только по инвайтам</small></div>
+      </button>
     </div>
-
-    <button id="startKaraoke" class="sing-button ready">
-      <span>▶</span>
-      НАЧАТЬ ПЕТЬ
-      <small>${track.hasSyncedLyrics ? "синхронный текст готов" : track.hasLyrics ? "обычный текст — листай вручную во время песни" : "для этой версии текста нет"}</small>
-    </button>
   `;
 }
 
-function bindLibraryEvents() {
+function draftMarkup(draft) {
+  const accepted = draft.participants.filter((p) => p.status === "accepted").length;
+  return `
+    <div class="draft">
+      <strong>${escapeHtml(draft.track.title)}</strong>
+      <span>${draft.participants.map((p) => `${escapeHtml(p.name)} — ${p.status === "accepted" ? "✓" : p.status === "pending" ? "…" : "×"}`).join("<br>")}</span>
+      <div class="draft-actions">
+        <button class="primary compact" data-draft-start="${draft.id}" ${accepted < 2 ? "disabled" : ""}>${state.room.current ? "В очередь" : "Начать"}</button>
+        <button class="secondary compact" data-draft-cancel="${draft.id}">Отмена</button>
+      </div>
+    </div>
+  `;
+}
+
+function queueMarkup(item) {
+  const mine = item.owner.id === myId();
+  return `
+    <div class="queue-item">
+      <b>${item.position}</b>
+      <div>
+        <strong>${escapeHtml(item.track.title)}</strong>
+        <span>${escapeHtml(item.owner.name)} · ${item.singers.length > 1 ? `${item.singers.length} поют` : "соло"}</span>
+      </div>
+      ${mine ? `<button class="icon-button" data-queue-remove="${item.id}" title="Убрать из очереди">×</button>` : ""}
+    </div>
+  `;
+}
+
+function bindLibrary() {
   const input = document.querySelector("#search");
+  input?.addEventListener("input", () => {
+    state.query = input.value;
+    clearTimeout(state.searchTimer);
+    if (state.query.trim().length < 2) {
+      state.results = [];
+      state.searching = false;
+      render();
+      return;
+    }
+    state.searchTimer = setTimeout(() => doSearch(state.query), 320);
+  });
+
   input?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") doSearch(input.value);
+    if (event.key === "Enter") {
+      clearTimeout(state.searchTimer);
+      doSearch(input.value);
+    }
   });
 
   document.querySelectorAll("[data-search]").forEach((button) => {
     button.addEventListener("click", () => {
-      input.value = button.dataset.search;
-      doSearch(button.dataset.search);
+      state.query = button.dataset.search;
+      doSearch(state.query);
     });
   });
 
   document.querySelectorAll("[data-track-id]").forEach((button) => {
     button.addEventListener("click", () => {
       const id = Number(button.dataset.trackId);
-      state.selected = state.results.find((track) => track.id === id) || null;
+      state.selected = state.results.find((track) => Number(track.id) === id) || null;
       render();
     });
   });
 
-  document.querySelector("#joinVoice")?.addEventListener("click", joinVoice);
-  document.querySelector("#leaveVoice")?.addEventListener("click", leaveVoice);
-  document.querySelector("#startKaraoke")?.addEventListener("click", startSelectedKaraoke);
+  document.querySelector("#singSolo")?.addEventListener("click", addSolo);
+  document.querySelector("#openDuet")?.addEventListener("click", openDuetModal);
+  document.querySelector("#followCurrent")?.addEventListener("click", followCurrent);
+
+  document.querySelectorAll("[data-invite-accept]").forEach((button) => {
+    button.addEventListener("click", () => respondInvite(button.dataset.inviteAccept, true));
+  });
+  document.querySelectorAll("[data-invite-decline]").forEach((button) => {
+    button.addEventListener("click", () => respondInvite(button.dataset.inviteDecline, false));
+  });
+
+  document.querySelectorAll("[data-draft-start]").forEach((button) => {
+    button.addEventListener("click", () => commitDraft(button.dataset.draftStart));
+  });
+  document.querySelectorAll("[data-draft-cancel]").forEach((button) => {
+    button.addEventListener("click", () => cancelDraft(button.dataset.draftCancel));
+  });
+
+  document.querySelectorAll("[data-queue-remove]").forEach((button) => {
+    button.addEventListener("click", () => removeQueue(button.dataset.queueRemove));
+  });
 }
 
 async function doSearch(query) {
   const q = String(query || "").trim();
-  if (q.length < 2) {
-    statusMessage("Введи хотя бы 2 символа", "warn");
-    return;
-  }
+  if (q.length < 2) return;
 
-  statusMessage(`Ищем «${q}»…`, "loading");
+  state.query = q;
+  state.searching = true;
+  render();
+
+  const requestQuery = q;
   try {
     const response = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "SEARCH_FAILED");
+
+    if (state.query !== requestQuery) return;
     state.results = data.results || [];
     state.selected = state.results[0] || null;
-    render();
-    statusMessage(state.results.length ? "Нашёл. Выбери подходящую версию песни." : "Ничего не нашлось", state.results.length ? "ok" : "warn");
   } catch (error) {
     console.error(error);
-    statusMessage("Не удалось получить песни. Попробуй ещё раз.", "error");
-  }
-}
-
-async function joinVoice() {
-  if (!state.guildId) {
-    statusMessage("Запусти Activity внутри сервера Discord, а не в ЛС.", "warn");
-    return;
-  }
-
-  statusMessage("Подключаем бота к твоему голосовому каналу…", "loading");
-  try {
-    const response = await fetch("/api/voice/join", {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ guildId: state.guildId }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "VOICE_JOIN_FAILED");
-    state.connectedChannel = data.channelName;
-    render();
-    statusMessage(`Бот подключён к «${data.channelName}»`, "ok");
-  } catch (error) {
-    statusMessage(errorMessage(error.message), "error");
-  }
-}
-
-async function leaveVoice() {
-  try {
-    await fetch("/api/voice/leave", {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ guildId: state.guildId }),
-    });
+    toast("Поиск временно не сработал", "error");
   } finally {
-    stopKaraokeLoops();
-    state.connectedChannel = null;
-    state.karaoke = null;
-    state.mode = "library";
-    render();
-    statusMessage("Бот отключён от голосового канала", "info");
+    if (state.query === requestQuery) {
+      state.searching = false;
+      render();
+    }
   }
 }
 
-async function startSelectedKaraoke() {
-  if (!state.guildId) {
-    statusMessage("Запусти Activity внутри сервера Discord.", "warn");
-    return;
+async function addSolo() {
+  if (!state.selected) return;
+  try {
+    const data = await api("/api/song/solo", {
+      method: "POST",
+      body: JSON.stringify({
+        guildId: state.guildId,
+        track: trackPayload(state.selected),
+      }),
+    });
+    state.room = data.room;
+    if (data.started) {
+      toast("Песня запускается", "ok");
+      followCurrent();
+    } else {
+      toast(`Добавлено в очередь: №${data.queuePosition}`, "ok");
+      render();
+    }
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
   }
+}
+
+async function openDuetModal() {
   if (!state.selected) return;
 
-  const button = document.querySelector("#startKaraoke");
-  if (button) {
-    button.disabled = true;
-    button.classList.add("loading-button");
-    button.innerHTML = `<span class="tiny-spinner"></span> ИЩЕМ АУДИО… <small>обычно несколько секунд</small>`;
-  }
-  statusMessage("Ищем подходящую запись и подключаем бота…", "loading");
-
   try {
-    const track = {
-      id: state.selected.id,
-      title: state.selected.title,
-      artist: state.selected.artist,
-      album: state.selected.album,
-      duration: state.selected.duration,
-      instrumental: state.selected.instrumental,
-    };
+    const data = await api(`/api/voice/members?guildId=${encodeURIComponent(state.guildId)}`);
+    const others = (data.members || []).filter((member) => member.id !== myId());
 
-    const response = await fetch("/api/karaoke/start", {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ guildId: state.guildId, track }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "KARAOKE_START_FAILED");
+    const root = document.querySelector("#modalRoot");
+    root.innerHTML = `
+      <div class="modal-backdrop" id="duetBackdrop">
+        <section class="modal">
+          <div class="modal-head">
+            <div>
+              <small>ДУО / ГРУППА</small>
+              <h2>Кого позвать?</h2>
+              <p>Можно пригласить до трёх человек. Петь будут только те, кто сам нажмёт «Принять».</p>
+            </div>
+            <button id="closeDuet" class="icon-button">×</button>
+          </div>
 
-    state.connectedChannel = data.channelName || state.connectedChannel;
-    state.lyricMap = parseSyncedLyrics(state.selected.syncedLyrics);
-    state.activeLyricIndex = -999;
-    state.pitchTrail = [];
-    state.lastSingerPitchSeq = 0;
-    state.pitchRange = { min: 48, max: 72 };
-    state.karaoke = {
-      ...data,
-      positionMs: Number(data.positionMs) || 0,
-      sampledAt: performance.now(),
-    };
-    state.mode = "karaoke";
-    render();
-    startKaraokeLoops();
-  } catch (error) {
-    console.error(error);
-    render();
-    statusMessage(errorMessage(error.message), "error");
-  }
-}
+          <div class="member-list">
+            ${others.length ? others.map((member) => `
+              <label class="member-row">
+                <input type="checkbox" value="${member.id}" data-duet-member>
+                <div class="member-avatar">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(member.name.slice(0,1))}</div>
+                <div><strong>${escapeHtml(member.name)}</strong><span>в ${escapeHtml(data.channelName)}</span></div>
+              </label>
+            `).join("") : `<div class="modal-empty">В твоём voice сейчас больше никого нет.</div>`}
+          </div>
 
-function syncedLyricsMarkup() {
-  if (!state.lyricMap.length) return "";
-  return `
-    <div id="lyricsViewport" class="lyrics-viewport">
-      <div id="lyricsRail" class="lyrics-rail">
-        ${state.lyricMap.map((line, index) => `
-          <div class="rolling-lyric" data-lyric-index="${index}">${escapeHtml(line.text)}</div>
-        `).join("")}
-      </div>
-    </div>
-  `;
-}
+          <div class="together-note">
+            <b>🎶 Части вместе</b>
+            <span>Повторяющиеся припевы и хуки автоматически получают режим «ВСЕ» и окрашиваются цветами всех певцов.</span>
+          </div>
 
-function manualLyricsMarkup() {
-  const lines = plainLyricsLines(state.selected?.plainLyrics);
-  if (!lines.length) {
-    return `
-      <div class="manual-lyrics empty-manual">
-        <strong>Текста для этой версии нет</strong>
-        <span>Музыка всё равно продолжит играть.</span>
+          <button id="sendDuetInvites" class="primary wide" ${others.length ? "" : "disabled"}>Отправить инвайты</button>
+        </section>
       </div>
     `;
+
+    const close = () => root.replaceChildren();
+    document.querySelector("#closeDuet")?.addEventListener("click", close);
+    document.querySelector("#duetBackdrop")?.addEventListener("click", (e) => {
+      if (e.target.id === "duetBackdrop") close();
+    });
+
+    document.querySelector("#sendDuetInvites")?.addEventListener("click", async () => {
+      const selectedIds = [...document.querySelectorAll("[data-duet-member]:checked")]
+        .map((input) => input.value)
+        .slice(0, 3);
+
+      if (!selectedIds.length) {
+        toast("Выбери хотя бы одного человека", "warn");
+        return;
+      }
+
+      try {
+        await api("/api/duet/create", {
+          method: "POST",
+          body: JSON.stringify({
+            guildId: state.guildId,
+            track: trackPayload(state.selected),
+            inviteeIds: selectedIds,
+          }),
+        });
+        close();
+        await refreshRoom(true);
+        toast("Инвайты отправлены", "ok");
+      } catch (error) {
+        toast(errorMessage(error.message), "error");
+      }
+    });
+
+    document.querySelectorAll("[data-duet-member]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const checked = [...document.querySelectorAll("[data-duet-member]:checked")];
+        if (checked.length > 3) {
+          input.checked = false;
+          toast("Максимум 4 певца вместе с тобой", "warn");
+        }
+      });
+    });
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+async function respondInvite(draftId, accept) {
+  try {
+    await api("/api/duet/respond", {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId, draftId, accept }),
+    });
+    await refreshRoom(true);
+    toast(accept ? "Ты в дуо 🎤" : "Инвайт отклонён", accept ? "ok" : "info");
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+async function commitDraft(draftId) {
+  try {
+    const data = await api("/api/duet/commit", {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId, draftId }),
+    });
+    state.room = data.room;
+    if (data.started) {
+      toast("Дуо запускается", "ok");
+      followCurrent();
+    } else {
+      toast(`Дуо добавлено в очередь: №${data.queuePosition}`, "ok");
+      render();
+    }
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+async function cancelDraft(draftId) {
+  try {
+    await api("/api/duet/cancel", {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId, draftId }),
+    });
+    await refreshRoom(true);
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+async function removeQueue(queueId) {
+  try {
+    const data = await api("/api/queue/remove", {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId, queueId }),
+    });
+    state.room = {
+      current: data.current,
+      queue: data.queue,
+      myInvites: data.myInvites,
+      myDrafts: data.myDrafts,
+    };
+    render();
+  } catch (error) {
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+function followCurrent() {
+  if (!state.room.current) return;
+  state.mode = "karaoke";
+  state.watchingCurrent = true;
+  state.activeLyricIndex = -999;
+  render();
+}
+
+function lyricStyle(line, plan) {
+  const singerMap = new Map((plan.singers || []).map((s) => [s.id, s]));
+  const assigned = (line.singerIds || []).map((id) => singerMap.get(id)).filter(Boolean);
+
+  if (line.together && assigned.length > 1) {
+    const colors = assigned.map((s) => s.color);
+    return `--lyric-gradient:linear-gradient(90deg,${colors.join(",")});`;
   }
 
-  return `
-    <div class="manual-lyrics-wrap">
-      <div class="manual-hint">БЕЗ СИНХРОНИЗАЦИИ · ЛИСТАЙ ТЕКСТ САМ</div>
-      <div id="manualLyrics" class="manual-lyrics" tabindex="0">
-        ${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
-      </div>
-    </div>
-  `;
+  const color = assigned[0]?.color || "#f2f2f5";
+  return `--lyric-color:${escapeHtml(color)};`;
+}
+
+function lyricLabel(line, plan) {
+  const singerMap = new Map((plan.singers || []).map((s) => [s.id, s]));
+  if (line.together && (line.singerIds || []).length > 1) return "ВСЕ";
+  const singer = singerMap.get(line.singerIds?.[0]);
+  return singer?.name || "";
 }
 
 function renderKaraoke() {
-  const track = state.selected;
-  const source = state.karaoke?.source;
-  const durationMs = Math.max(1, Number(track.duration || source?.duration || 0) * 1000);
+  const current = state.room.current;
+  if (!current) {
+    state.mode = "library";
+    render();
+    return;
+  }
+
+  const plan = current.lyricPlan || { synced: false, singers: [], lines: [] };
+  const owner = current.owner.id === myId();
 
   app.innerHTML = `
     <main class="karaoke-shell">
-      <header class="karaoke-topbar">
-        <button id="backLibrary" class="ghost-button">← Каталог</button>
-        <div class="karaoke-title-mini">
-          <strong>${escapeHtml(track.title)}</strong>
-          <span>${escapeHtml(track.artist)}</span>
+      <header class="karaoke-top">
+        <button id="backLibrary" class="secondary compact">← Каталог</button>
+        <div class="karaoke-track">
+          <small>${owner ? "ТВОЯ ПЕСНЯ" : `ПОСТАВИЛ ${escapeHtml(current.owner.name)}`}</small>
+          <strong>${escapeHtml(current.track.title)}</strong>
+          <span>${escapeHtml(current.track.artist)}</span>
         </div>
-        <div class="live-pill"><i></i> КАРАОКЕ</div>
+        <div class="singer-legend">
+          ${(plan.singers || []).map((s) => `<span style="--singer:${escapeHtml(s.color)}"><i></i>${escapeHtml(s.name)}</span>`).join("")}
+        </div>
       </header>
 
       <section class="karaoke-stage">
-        <div class="stage-glow"></div>
-        <div id="countdownOverlay" class="countdown-overlay hidden">
+        <div id="countdownOverlay" class="countdown ${current.status === "countdown" ? "" : "hidden"}">
           <span>ПРИГОТОВЬСЯ</span>
           <strong id="countdownNumber">3</strong>
         </div>
 
-        <div class="stage-meta">
-          <div class="eyebrow">СЕЙЧАС ИГРАЕТ</div>
-          <h1>${escapeHtml(track.title)}</h1>
-          <p>${escapeHtml(track.artist)}</p>
-        </div>
+        ${plan.lines.length
+          ? plan.synced
+            ? `
+              <div id="lyricsViewport" class="lyrics-viewport">
+                <div class="lyrics-spacer"></div>
+                ${plan.lines.map((line) => `
+                  <div class="rolling-lyric ${line.together ? "together" : ""}" data-lyric-index="${line.index}" style="${lyricStyle(line, plan)}">
+                    <small>${escapeHtml(lyricLabel(line, plan))}</small>
+                    <span>${escapeHtml(line.text)}</span>
+                  </div>
+                `).join("")}
+                <div class="lyrics-spacer"></div>
+              </div>
+            `
+            : `
+              <div class="manual-wrap">
+                <div class="manual-hint">Текст без синхронизации — крути как хочешь</div>
+                <div class="manual-lyrics">
+                  ${plan.lines.map((line) => `
+                    <div class="manual-line ${line.together ? "together" : ""}" style="${lyricStyle(line, plan)}">
+                      <small>${escapeHtml(lyricLabel(line, plan))}</small>
+                      <span>${escapeHtml(line.text)}</span>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>
+            `
+          : `<div class="no-lyrics"><strong>Текста нет</strong><span>Музыка продолжает играть.</span></div>`}
 
-        <div class="pitch-guide-card">
-          <div class="pitch-guide-head">
-            <div>
-              <span class="pitch-kicker">ВЫСОТА ГОЛОСА</span>
-              <strong id="singerNote">—</strong>
-            </div>
-            <div class="pitch-legend">
-              <span><i class="legend-target"></i> НОТЫ ПЕСНИ</span>
-              <span><i class="legend-voice"></i> ТВОЙ ГОЛОС</span>
-            </div>
-          </div>
-          <div class="pitch-canvas-wrap">
-            <canvas id="pitchCanvas" class="pitch-canvas"></canvas>
-            <div class="pitch-playhead">
-              <i></i>
-              <span>СЕЙЧАС</span>
-            </div>
-            <div id="pitchWaiting" class="pitch-waiting">Строим шкалу нот…</div>
-          </div>
-        </div>
-
-        <div class="lyrics-stage ${state.lyricMap.length ? "synced" : "no-sync"}">
-          ${state.lyricMap.length ? syncedLyricsMarkup() : manualLyricsMarkup()}
-        </div>
-
-        <div class="live-score-row">
-          <div class="live-score-card">
-            <span>НОТЫ</span>
-            <strong id="liveAccuracy">—%</strong>
-          </div>
-          <div class="live-score-card verdict-card">
-            <span id="liveVerdictLabel">СЛУШАЕМ ТЕБЯ</span>
-            <strong id="liveVerdict">♪</strong>
-          </div>
-          <div class="live-score-card">
-            <span>КОМБО</span>
-            <strong id="liveCombo">×0</strong>
-          </div>
-        </div>
-
-        <div class="player-block">
+        <div class="player-card">
           <div class="time-row">
-            <span id="currentTime">0:00</span>
-            <span id="durationTime">${formatClock(durationMs)}</span>
+            <span id="currentTime">${formatClock(current.positionMs)}</span>
+            <span>${formatDuration(current.track.duration)}</span>
           </div>
           <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-          <div class="player-controls">
-            <button id="pauseResume" class="control-button">Ⅱ Пауза</button>
-            <button id="stopKaraoke" class="control-button danger">■ Закончить</button>
-          </div>
-        </div>
 
-        <div class="source-row">
-          <span id="playbackStatus">Подключено к ${escapeHtml(state.connectedChannel || "voice")}</span>
-          <span>${source ? `Аудио: ${escapeHtml(source.title)}` : "Аудио загружается…"}</span>
+          <div class="player-bottom">
+            <span id="playbackStatus">${statusLabel(current)}</span>
+            ${owner ? `
+              <div class="owner-controls">
+                <button id="pauseResume" class="secondary compact">${current.status === "paused" ? "▶ Продолжить" : "Ⅱ Пауза"}</button>
+                <button id="stopKaraoke" class="danger compact">■ Закончить</button>
+              </div>
+            ` : `<span class="follow-note">Только ${escapeHtml(current.owner.name)} может остановить песню</span>`}
+          </div>
         </div>
       </section>
     </main>
   `;
 
-  document.querySelector("#pauseResume")?.addEventListener("click", togglePause);
-  document.querySelector("#stopKaraoke")?.addEventListener("click", stopCurrentKaraoke);
-  document.querySelector("#backLibrary")?.addEventListener("click", async () => {
-    if (["playing", "paused", "buffering", "resolving", "countdown"].includes(state.karaoke?.status)) {
-      await stopCurrentKaraoke();
-      return;
-    }
-    stopKaraokeLoops();
+  document.querySelector("#backLibrary")?.addEventListener("click", () => {
     state.mode = "library";
+    state.watchingCurrent = false;
     render();
   });
 
+  document.querySelector("#pauseResume")?.addEventListener("click", togglePause);
+  document.querySelector("#stopKaraoke")?.addEventListener("click", stopCurrent);
   updateKaraokeVisuals();
 }
 
-function renderResult() {
-  const result = state.karaoke?.score?.result;
-  const track = state.selected;
-  const available = Boolean(result?.available);
-
-  app.innerHTML = `
-    <main class="result-shell">
-      <section class="result-card">
-        <div class="result-eyebrow">РЕЗУЛЬТАТ</div>
-        <h1>${escapeHtml(track.title)}</h1>
-        <p class="result-artist">${escapeHtml(track.artist)}</p>
-
-        ${available ? `
-          <div class="grade-orb">${escapeHtml(result.grade)}</div>
-          <div class="big-result-score">${Number(result.points || 0).toLocaleString("ru-RU")}</div>
-          <div class="result-caption">ОЧКОВ · ОЦЕНКА НОТ BETA</div>
-
-          <div class="result-bars">
-            ${resultBar("Попадание в ноты", result.pitch)}
-            ${resultBar("Тайминг", result.timing)}
-            ${resultBar("Стабильность", result.stability)}
-            ${resultBar("Участие", result.participation)}
-          </div>
-
-          <div class="hit-grid">
-            <div><strong>${result.perfect}</strong><span>PERFECT</span></div>
-            <div><strong>${result.great}</strong><span>GREAT</span></div>
-            <div><strong>${result.good}</strong><span>GOOD</span></div>
-            <div><strong>${result.miss}</strong><span>MISS</span></div>
-          </div>
-          <div class="max-combo">🔥 Максимальное комбо: <strong>×${result.maxCombo}</strong></div>
-          <p class="beta-note">Пока это beta-оценка: эталон нот строится автоматически из оригинальной записи. В наушниках результат будет заметно точнее.</p>
-        ` : `
-          <div class="no-score">
-            <div class="no-score-icon">♪</div>
-            <h2>Не хватило голоса для оценки</h2>
-            <p>Нужно спеть чуть дольше, чтобы бот успел сравнить ноты.</p>
-          </div>
-        `}
-
-        <div class="result-actions">
-          <button id="singAgain" class="primary result-button">↻ Спеть ещё раз</button>
-          <button id="resultLibrary" class="secondary result-button">Каталог</button>
-        </div>
-      </section>
-    </main>
-  `;
-
-  document.querySelector("#singAgain")?.addEventListener("click", () => {
-    state.mode = "library";
-    render();
-    document.querySelector("#startKaraoke")?.click();
-  });
-  document.querySelector("#resultLibrary")?.addEventListener("click", () => {
-    state.mode = "library";
-    render();
-  });
-}
-
-function resultBar(label, value) {
-  const safe = Math.max(0, Math.min(100, Number(value) || 0));
-  return `
-    <div class="result-bar-row">
-      <div><span>${escapeHtml(label)}</span><strong>${Math.round(safe)}%</strong></div>
-      <div class="result-bar-track"><i style="width:${safe}%"></i></div>
-    </div>
-  `;
+function statusLabel(current) {
+  const labels = {
+    resolving: "Ищем аудио…",
+    countdown: "Старт через 3 секунды",
+    buffering: "Буферизация…",
+    playing: `Играет в ${current.channelName || "voice"}`,
+    paused: "Пауза",
+    finished: "Песня закончилась",
+    error: "Ошибка воспроизведения",
+  };
+  return labels[current.status] || current.status;
 }
 
 function estimatedPositionMs() {
-  if (!state.karaoke) return 0;
-  const base = Number(state.karaoke.positionMs) || 0;
-  if (state.karaoke.status !== "playing") return base;
-  return base + Math.max(0, performance.now() - Number(state.karaoke.sampledAt || performance.now()));
+  const current = state.room.current;
+  if (!current) return 0;
+
+  const base = Number(current.positionMs) || 0;
+  if (current.status !== "playing") return base;
+
+  const sampledAt = Number(current.sampledAt || performance.now());
+  return base + Math.max(0, performance.now() - sampledAt);
 }
 
-function activeLyricIndex(positionMs) {
-  const lines = state.lyricMap;
-  if (!lines.length) return -1;
+function activeLyricIndex(positionMs, lines) {
   let low = 0;
   let high = lines.length - 1;
   let answer = -1;
 
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    if (lines[mid].timeMs <= positionMs) {
+    if (Number(lines[mid].timeMs) <= positionMs) {
       answer = mid;
       low = mid + 1;
     } else {
@@ -636,406 +810,132 @@ function activeLyricIndex(positionMs) {
   return answer;
 }
 
-function updateRollingLyrics(positionMs) {
-  if (!state.lyricMap.length) return;
-  const index = activeLyricIndex(positionMs);
-  if (index === state.activeLyricIndex) return;
-  state.activeLyricIndex = index;
-
-  document.querySelectorAll(".rolling-lyric").forEach((line) => {
-    const lineIndex = Number(line.dataset.lyricIndex);
-    line.classList.toggle("active", lineIndex === index);
-    line.classList.toggle("passed", lineIndex < index);
-    line.classList.toggle("upcoming", lineIndex > index);
-  });
-
-  const viewport = document.querySelector("#lyricsViewport");
-  const active = document.querySelector(`[data-lyric-index="${Math.max(0, index)}"]`);
-  if (viewport && active) {
-    const target = active.offsetTop - viewport.clientHeight / 2 + active.offsetHeight / 2;
-    viewport.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
-  }
-}
-
-
-function midiToNoteName(value) {
-  if (!Number.isFinite(value)) return "—";
-  const midi = Math.round(value);
-  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
-}
-
-function captureSingerPitch() {
-  const sample = state.karaoke?.singerPitch;
-  if (!sample?.seq || sample.seq === state.lastSingerPitchSeq) return;
-  state.lastSingerPitchSeq = sample.seq;
-
-  if (!Number.isFinite(Number(sample.midi))) return;
-  state.pitchTrail.push({
-    seq: Number(sample.seq),
-    timeMs: Number(sample.positionMs) || estimatedPositionMs(),
-    midi: Number(sample.midi),
-    confidence: Number(sample.confidence) || 0,
-  });
-
-  const now = estimatedPositionMs();
-  state.pitchTrail = state.pitchTrail.filter((point) => point.timeMs >= now - 3200);
-}
-
-function roundedRect(ctx, x, y, width, height, radius) {
-  const r = Math.min(radius, Math.abs(width) / 2, Math.abs(height) / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + width - r, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
-  ctx.lineTo(x + width, y + height - r);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  ctx.lineTo(x + r, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-function pitchX(timeMs, positionMs, width) {
-  const playheadX = width * 0.27;
-  const delta = timeMs - positionMs;
-  if (delta < 0) return playheadX + (delta / 2300) * playheadX;
-  return playheadX + (delta / 6200) * (width - playheadX);
-}
-
-function desiredPitchRange(segments, trail) {
-  const values = [];
-  for (const segment of segments || []) {
-    if (Number.isFinite(Number(segment.midi))) values.push(Number(segment.midi));
-  }
-  for (const point of trail || []) {
-    if (Number.isFinite(Number(point.midi))) values.push(Number(point.midi));
-  }
-
-  if (!values.length) return state.pitchRange;
-
-  let min = Math.floor(Math.min(...values)) - 2;
-  let max = Math.ceil(Math.max(...values)) + 2;
-  const center = (min + max) / 2;
-
-  if (max - min < 12) {
-    min = center - 6;
-    max = center + 6;
-  }
-  if (max - min > 25) {
-    min = center - 12.5;
-    max = center + 12.5;
-  }
-
-  return {
-    min: Math.max(28, min),
-    max: Math.min(98, max),
-  };
-}
-
-function pitchY(midi, minMidi, maxMidi, height) {
-  const pad = 18;
-  const usable = Math.max(1, height - pad * 2);
-  const ratio = (midi - minMidi) / Math.max(1, maxMidi - minMidi);
-  return height - pad - Math.max(0, Math.min(1, ratio)) * usable;
-}
-
-function drawPitchGuide(positionMs) {
-  const canvas = document.querySelector("#pitchCanvas");
-  if (!canvas) return;
-
-  const bounds = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(bounds.width));
-  const height = Math.max(1, Math.round(bounds.height));
-  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-
-  const pixelW = Math.round(width * dpr);
-  const pixelH = Math.round(height * dpr);
-  if (canvas.width !== pixelW || canvas.height !== pixelH) {
-    canvas.width = pixelW;
-    canvas.height = pixelH;
-  }
-
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  const guide = state.karaoke?.noteGuide;
-  const segments = guide?.segments || [];
-
-  const targetRange = desiredPitchRange(segments, state.pitchTrail);
-  state.pitchRange.min += (targetRange.min - state.pitchRange.min) * 0.12;
-  state.pitchRange.max += (targetRange.max - state.pitchRange.max) * 0.12;
-
-  const minMidi = state.pitchRange.min;
-  const maxMidi = state.pitchRange.max;
-
-  // Тонкая нотная сетка.
-  const firstMidi = Math.floor(minMidi);
-  const lastMidi = Math.ceil(maxMidi);
-  ctx.font = "700 9px Inter, system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-
-  for (let midi = firstMidi; midi <= lastMidi; midi += 1) {
-    const y = pitchY(midi, minMidi, maxMidi, height);
-    const isC = ((midi % 12) + 12) % 12 === 0;
-
-    ctx.strokeStyle = isC ? "rgba(255,255,255,.105)" : "rgba(255,255,255,.035)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, Math.round(y) + 0.5);
-    ctx.lineTo(width, Math.round(y) + 0.5);
-    ctx.stroke();
-
-    if (isC) {
-      ctx.fillStyle = "rgba(255,255,255,.28)";
-      ctx.fillText(midiToNoteName(midi), 8, y - 7);
-    }
-  }
-
-  // Ноты песни едут справа налево относительно фиксированного playhead.
-  for (const segment of segments) {
-    const x1 = pitchX(Number(segment.startMs), positionMs, width);
-    const x2 = pitchX(Number(segment.endMs), positionMs, width);
-    if (x2 < -20 || x1 > width + 20) continue;
-
-    const y = pitchY(Number(segment.midi), minMidi, maxMidi, height);
-    const barH = 12;
-    const isActive =
-      Number(segment.startMs) <= positionMs &&
-      Number(segment.endMs) >= positionMs;
-    const passed = Number(segment.endMs) < positionMs;
-
-    const left = Math.max(-10, x1);
-    const barW = Math.max(8, x2 - x1);
-
-    ctx.save();
-    if (isActive) {
-      ctx.shadowBlur = 18;
-      ctx.shadowColor = "rgba(177,117,255,.82)";
-      ctx.fillStyle = "rgba(210,181,255,.98)";
-    } else if (passed) {
-      ctx.fillStyle = "rgba(138,101,196,.28)";
-    } else {
-      ctx.fillStyle = "rgba(159,104,239,.72)";
-    }
-
-    roundedRect(ctx, left, y - barH / 2, barW, barH, 6);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // Траектория голоса за последние ~3 секунды.
-  const trail = state.pitchTrail.filter(
-    (point) => point.timeMs >= positionMs - 3000 && point.timeMs <= positionMs + 300,
-  );
-
-  if (trail.length) {
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "rgba(74,231,255,.92)";
-    ctx.lineWidth = 4;
-    ctx.shadowBlur = 13;
-    ctx.shadowColor = "rgba(74,231,255,.8)";
-    ctx.beginPath();
-
-    let previous = null;
-    for (const point of trail) {
-      const x = pitchX(point.timeMs, positionMs, width);
-      const y = pitchY(point.midi, minMidi, maxMidi, height);
-
-      if (!previous || point.timeMs - previous.timeMs > 550 || Math.abs(point.midi - previous.midi) > 7) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-      previous = point;
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    const latest = trail.at(-1);
-    const x = pitchX(latest.timeMs, positionMs, width);
-    const y = pitchY(latest.midi, minMidi, maxMidi, height);
-
-    ctx.save();
-    ctx.fillStyle = "#e8fcff";
-    ctx.shadowBlur = 22;
-    ctx.shadowColor = "rgba(74,231,255,1)";
-    ctx.beginPath();
-    ctx.arc(x, y, 6.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  const waiting = document.querySelector("#pitchWaiting");
-  if (waiting) {
-    waiting.classList.toggle("hidden", Boolean(guide?.ready || trail.length));
-    if (!guide?.ready && trail.length) waiting.textContent = "Слушаем голос · карта нот ещё строится";
-    else waiting.textContent = "Строим шкалу нот…";
-  }
-
-  const note = document.querySelector("#singerNote");
-  const singer = state.karaoke?.singerPitch;
-  if (note) {
-    note.textContent = singer?.note || "—";
-    note.title = singer?.hz ? `${singer.hz} Hz` : "";
-  }
-}
-
 function updateKaraokeVisuals() {
-  if (state.mode !== "karaoke" || !state.karaoke) return;
+  if (state.mode !== "karaoke") return;
+  const current = state.room.current;
+  if (!current) return;
 
-  const sourceDuration = Number(state.karaoke.source?.duration) || 0;
-  const durationMs = Math.max(1, Number(state.selected?.duration || sourceDuration || 0) * 1000);
+  const durationMs = Math.max(1, Number(current.track.duration || current.source?.duration || 0) * 1000);
   const positionMs = Math.min(estimatedPositionMs(), durationMs || Infinity);
   const ratio = Math.max(0, Math.min(1, positionMs / durationMs));
 
   const currentTime = document.querySelector("#currentTime");
-  const progressBar = document.querySelector("#progressBar");
+  const bar = document.querySelector("#progressBar");
   if (currentTime) currentTime.textContent = formatClock(positionMs);
-  if (progressBar) progressBar.style.width = `${ratio * 100}%`;
+  if (bar) bar.style.width = `${ratio * 100}%`;
 
-  updateRollingLyrics(positionMs);
-  captureSingerPitch();
-  drawPitchGuide(positionMs);
+  const plan = current.lyricPlan;
+  if (plan?.synced && plan.lines?.length) {
+    const index = activeLyricIndex(positionMs, plan.lines);
+    if (index !== state.activeLyricIndex) {
+      state.activeLyricIndex = index;
+
+      document.querySelectorAll(".rolling-lyric").forEach((line) => {
+        const i = Number(line.dataset.lyricIndex);
+        line.classList.toggle("active", i === index);
+        line.classList.toggle("passed", i < index);
+      });
+
+      const viewport = document.querySelector("#lyricsViewport");
+      const active = document.querySelector(`[data-lyric-index="${Math.max(0, index)}"]`);
+      if (viewport && active) {
+        const target = active.offsetTop - viewport.clientHeight / 2 + active.offsetHeight / 2;
+        viewport.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+      }
+    }
+  }
 
   const overlay = document.querySelector("#countdownOverlay");
-  const countdownNumber = document.querySelector("#countdownNumber");
+  const number = document.querySelector("#countdownNumber");
   if (overlay) {
-    const left = Number(state.karaoke.countdownEndsAt || 0) - Date.now();
-    const showing = state.karaoke.status === "countdown" && left > 0;
-    overlay.classList.toggle("hidden", !showing);
-    if (showing && countdownNumber) countdownNumber.textContent = String(Math.max(1, Math.ceil(left / 1000)));
-  }
-
-  const live = state.karaoke.score?.live;
-  const liveAccuracy = document.querySelector("#liveAccuracy");
-  const liveCombo = document.querySelector("#liveCombo");
-  const liveVerdict = document.querySelector("#liveVerdict");
-  if (liveAccuracy) liveAccuracy.textContent = live ? `${live.accuracy}%` : "—%";
-  if (liveCombo) liveCombo.textContent = `×${Number(state.karaoke.score?.combo || 0)}`;
-  if (liveVerdict) {
-    liveVerdict.textContent = live?.verdict || "♪";
-    liveVerdict.dataset.verdict = live?.verdict || "";
-  }
-
-  const pause = document.querySelector("#pauseResume");
-  if (pause) {
-    pause.textContent = state.karaoke.status === "paused" ? "▶ Продолжить" : "Ⅱ Пауза";
-    pause.disabled = !["playing", "paused"].includes(state.karaoke.status);
+    const left = Number(current.countdownEndsAt || 0) - Date.now();
+    const show = current.status === "countdown" && left > 0;
+    overlay.classList.toggle("hidden", !show);
+    if (show && number) number.textContent = String(Math.max(1, Math.ceil(left / 1000)));
   }
 
   const status = document.querySelector("#playbackStatus");
-  if (status) {
-    const labels = {
-      resolving: "Ищем аудио…",
-      countdown: "Приготовься — старт через 3 секунды",
-      buffering: "Буферизация…",
-      playing: `Играет в ${state.connectedChannel || "voice"}`,
-      paused: "Пауза",
-      finished: "Песня закончилась",
-      error: "Ошибка воспроизведения",
-      stopped: "Остановлено",
-    };
-    status.textContent = labels[state.karaoke.status] || state.karaoke.status;
-  }
-}
-
-async function pollKaraokeState() {
-  if (state.mode !== "karaoke" || !state.guildId) return;
-  try {
-    const response = await fetch(`/api/karaoke/state?guildId=${encodeURIComponent(state.guildId)}`, { cache: "no-store" });
-    const data = await response.json();
-    if (!response.ok) return;
-
-    const oldStatus = state.karaoke?.status;
-    state.karaoke = {
-      ...state.karaoke,
-      ...data,
-      positionMs: Number(data.positionMs) || 0,
-      sampledAt: performance.now(),
-    };
-
-    if (data.channelName) state.connectedChannel = data.channelName;
-    updateKaraokeVisuals();
-
-    if (data.status === "finished" && oldStatus !== "finished") {
-      stopKaraokeLoops();
-      state.mode = "result";
-      render();
-      return;
-    }
-
-    if (data.status === "error" && oldStatus !== "error") {
-      const status = document.querySelector("#playbackStatus");
-      if (status) status.textContent = errorMessage(data.error || "AUDIO_PLAYER_ERROR");
-    }
-  } catch (error) {
-    console.debug("karaoke state poll", error);
-  }
-}
-
-function startKaraokeLoops() {
-  stopKaraokeLoops();
-  state.pollTimer = setInterval(pollKaraokeState, 250);
-  state.visualTimer = setInterval(updateKaraokeVisuals, 50);
-}
-
-function stopKaraokeLoops() {
-  if (state.pollTimer) clearInterval(state.pollTimer);
-  if (state.visualTimer) clearInterval(state.visualTimer);
-  state.pollTimer = null;
-  state.visualTimer = null;
-}
-
-async function karaokeControl(action) {
-  const response = await fetch(`/api/karaoke/${action}`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ guildId: state.guildId }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `KARAOKE_${action.toUpperCase()}_FAILED`);
-  state.karaoke = {
-    ...state.karaoke,
-    ...data,
-    positionMs: Number(data.positionMs) || 0,
-    sampledAt: performance.now(),
-  };
-  updateKaraokeVisuals();
+  if (status) status.textContent = statusLabel(current);
 }
 
 async function togglePause() {
+  const current = state.room.current;
+  if (!current) return;
+  const route = current.status === "paused" ? "resume" : "pause";
+
   try {
-    await karaokeControl(state.karaoke?.status === "paused" ? "resume" : "pause");
+    await api(`/api/karaoke/${route}`, {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId }),
+    });
+    await refreshRoom(false);
   } catch (error) {
-    console.error(error);
+    toast(errorMessage(error.message), "error");
   }
 }
 
-async function stopCurrentKaraoke() {
+async function stopCurrent() {
   try {
-    await karaokeControl("stop");
+    await api("/api/karaoke/stop", {
+      method: "POST",
+      body: JSON.stringify({ guildId: state.guildId }),
+    });
+    state.mode = "library";
+    state.watchingCurrent = false;
+    await refreshRoom(true);
   } catch (error) {
-    console.error(error);
-  } finally {
-    stopKaraokeLoops();
-    if (state.karaoke?.score?.result) {
-      state.mode = "result";
-      render();
-    } else {
-      state.mode = "library";
-      render();
-      statusMessage("Караоке остановлено. Бот остался в голосовом канале.", "info");
+    toast(errorMessage(error.message), "error");
+  }
+}
+
+async function refreshRoom(shouldRender = false) {
+  if (!state.guildId || !state.accessToken) return;
+
+  try {
+    const data = await api(`/api/room/state?guildId=${encodeURIComponent(state.guildId)}`);
+    const oldCurrentId = state.room.current?.id;
+
+    state.room = {
+      current: data.current
+        ? { ...data.current, sampledAt: performance.now() }
+        : null,
+      queue: data.queue || [],
+      myInvites: data.myInvites || [],
+      myDrafts: data.myDrafts || [],
+    };
+
+    if (state.mode === "karaoke") {
+      if (!state.room.current) {
+        state.mode = "library";
+        state.watchingCurrent = false;
+        render();
+        return;
+      }
+
+      if (oldCurrentId !== state.room.current.id) {
+        state.activeLyricIndex = -999;
+        render();
+        return;
+      }
+
+      updateKaraokeVisuals();
+      return;
     }
+
+    if (shouldRender) render();
+  } catch (error) {
+    console.debug("room poll", error);
   }
 }
 
 async function initDiscord() {
-  app.innerHTML = `<div class="boot"><div class="spinner"></div><strong>Запускаем караоке…</strong><span>Подключаемся к Discord</span></div>`;
+  app.innerHTML = `
+    <div class="boot">
+      <div class="spinner"></div>
+      <strong>Запускаем караоке…</strong>
+      <span>Подключаемся к Discord</span>
+    </div>
+  `;
 
   const configResponse = await fetch("/api/config");
   const config = await configResponse.json();
@@ -1059,15 +959,23 @@ async function initDiscord() {
     body: JSON.stringify({ code }),
   });
   const tokenData = await tokenResponse.json();
+
   if (!tokenResponse.ok || !tokenData.access_token) {
     throw new Error(tokenData.error || "TOKEN_EXCHANGE_FAILED");
   }
 
   state.accessToken = tokenData.access_token;
-  state.auth = await state.sdk.commands.authenticate({ access_token: state.accessToken });
+  state.auth = await state.sdk.commands.authenticate({
+    access_token: state.accessToken,
+  });
+
   if (!state.auth) throw new Error("DISCORD_AUTH_FAILED");
 
+  await refreshRoom(false);
   render();
+
+  state.roomPoll = setInterval(() => refreshRoom(state.mode === "library"), 850);
+  state.visualTimer = setInterval(updateKaraokeVisuals, 80);
 }
 
 initDiscord().catch(async (error) => {
@@ -1079,7 +987,7 @@ initDiscord().catch(async (error) => {
       <h1>Activity не смогла запуститься</h1>
       <p>${escapeHtml(error.message)}</p>
       <div class="fatal-help">
-        Открывай эту страницу именно через Discord Activity. Если ошибка про Client Secret — добавь его в переменные Bothost.
+        Открывай эту страницу через Discord Activity. Проверь Client Secret и URL Mapping.
       </div>
     </div>
   `;
