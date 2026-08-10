@@ -7,11 +7,6 @@ const execFileAsync = promisify(execFile);
 const resolveCache = new Map();
 const CACHE_TTL = 6 * 60 * 60_000;
 
-function textOf(value) {
-  if (value == null) return "";
-  return String(value);
-}
-
 function normalize(value = "") {
   return String(value)
     .toLocaleLowerCase("ru-RU")
@@ -99,9 +94,9 @@ function scoreCandidate(candidate, track) {
 
 function entryToCandidate(entry) {
   return {
-    videoId: textOf(entry?.id || entry?.url),
-    title: textOf(entry?.title),
-    author: textOf(
+    videoId: String(entry?.id || entry?.url || ""),
+    title: String(entry?.title || ""),
+    author: String(
       entry?.channel ||
         entry?.uploader ||
         entry?.channel_name ||
@@ -159,7 +154,6 @@ async function findBestCandidate(track) {
   try {
     data = JSON.parse(stdout);
   } catch (error) {
-    console.error("[AUDIO] yt-dlp вернул невалидный JSON");
     throw new Error("AUDIO_SEARCH_BAD_RESPONSE", { cause: error });
   }
 
@@ -198,9 +192,7 @@ function makeTailCollector(limit = 12_000) {
   return {
     push(chunk) {
       value += chunk.toString("utf8");
-      if (value.length > limit) {
-        value = value.slice(-limit);
-      }
+      if (value.length > limit) value = value.slice(-limit);
     },
     get() {
       return value.trim();
@@ -218,14 +210,12 @@ function killProcess(child) {
   }
 }
 
-async function createPcmStream(videoId) {
+async function createOggOpusStream(videoId) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
   const ytErr = makeTailCollector();
   const ffErr = makeTailCollector();
 
-  // yt-dlp пишет медиапоток в stdout.
-  // Node 24 используется как JS runtime для актуальных YouTube challenges.
   const downloader = spawn(
     "yt-dlp",
     [
@@ -246,8 +236,15 @@ async function createPcmStream(videoId) {
     },
   );
 
-  // FFmpeg принимает любой контейнер от yt-dlp и отдаёт Discord готовый PCM:
-  // stereo, 48 kHz, signed 16-bit little-endian.
+  /*
+   * ВАЖНО:
+   * Раньше здесь FFmpeg отдавал raw PCM (s16le).
+   * Тогда @discordjs/voice должен был сам кодировать PCM -> Opus,
+   * из-за чего требовался @discordjs/opus/opusscript.
+   *
+   * Теперь FFmpeg сам кодирует звук в Opus и заворачивает его в Ogg.
+   * Discord.js только демультиплексирует готовые Opus-пакеты.
+   */
   const ffmpeg = spawn(
     "ffmpeg",
     [
@@ -261,8 +258,16 @@ async function createPcmStream(videoId) {
       "2",
       "-ar",
       "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "128k",
+      "-vbr",
+      "on",
+      "-application",
+      "audio",
       "-f",
-      "s16le",
+      "ogg",
       "pipe:1",
     ],
     {
@@ -273,7 +278,6 @@ async function createPcmStream(videoId) {
   downloader.stderr.on("data", (chunk) => ytErr.push(chunk));
   ffmpeg.stderr.on("data", (chunk) => ffErr.push(chunk));
 
-  // Не даём EPIPE уронить процесс, если один из subprocess завершился раньше.
   ffmpeg.stdin.on("error", () => {});
   downloader.stdout.on("error", () => {});
 
@@ -284,13 +288,9 @@ async function createPcmStream(videoId) {
     killProcess(ffmpeg);
   };
 
-  // Когда Discord уничтожит ресурс, завершаем yt-dlp и ffmpeg.
   ffmpeg.stdout.once("close", cleanup);
   ffmpeg.stdout.once("error", cleanup);
 
-  // Не возвращаем поток, пока реально не появился первый PCM-буфер.
-  // Так ошибка YouTube сразу попадёт в /karaoke/start, а не потеряется
-  // внутри AudioPlayer спустя несколько секунд.
   await new Promise((resolve, reject) => {
     let settled = false;
 
@@ -312,12 +312,11 @@ async function createPcmStream(videoId) {
       done(reject, error);
     };
 
-    const onReadable = () => {
-      done(resolve);
-    };
+    const onReadable = () => done(resolve);
 
     const onDownloaderExit = (code, signal) => {
       if (code === 0) return;
+
       fail(
         "AUDIO_DOWNLOAD_FAILED",
         new Error(
@@ -328,6 +327,7 @@ async function createPcmStream(videoId) {
 
     const onFfmpegExit = (code, signal) => {
       if (code === 0) return;
+
       fail(
         "AUDIO_TRANSCODE_FAILED",
         new Error(
@@ -359,11 +359,14 @@ export async function resolveAudio(track) {
   }
 
   const candidate = await findBestCandidate(track);
-  const stream = await createPcmStream(candidate.videoId);
+  const stream = await createOggOpusStream(candidate.videoId);
 
   return {
     stream,
-    inputType: StreamType.Raw,
+
+    // Ключевой фикс: это уже готовый Opus в Ogg, а НЕ raw PCM.
+    inputType: StreamType.OggOpus,
+
     source: {
       provider: "youtube-yt-dlp",
       videoId: candidate.videoId,
