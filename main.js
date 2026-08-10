@@ -29,6 +29,7 @@ const state = {
   roomPoll: null,
   visualTimer: null,
   searchTimer: null,
+  roomSignature: "",
 };
 
 const popular = [
@@ -106,6 +107,8 @@ function errorMessage(code) {
     DUET_NEEDS_ACCEPTED: "Нужно, чтобы хотя бы один человек принял инвайт.",
     DUET_DRAFT_NOT_FOUND: "Этот инвайт уже не существует.",
     DUET_NOT_INVITED: "Этот инвайт предназначен другому человеку.",
+    GUILD_NOT_ALLOWED: "Караоке работает только на двух разрешённых Discord-серверах.",
+    VOICE_NOT_ALLOWED: "Караоке работает только в двух разрешённых голосовых каналах.",
   };
   return messages[code] || `Ошибка: ${code}`;
 }
@@ -176,6 +179,77 @@ function singerDots(singers = []) {
       <span>${singers.map((s) => escapeHtml(s.name)).join(" · ")}</span>
     </div>
   `;
+}
+
+
+function roomSignature(room = state.room) {
+  return JSON.stringify({
+    current: room.current
+      ? {
+          id: room.current.id,
+          status: room.current.status,
+          owner: room.current.owner?.id,
+          singers: (room.current.singers || []).map((s) => s.id),
+        }
+      : null,
+    queue: (room.queue || []).map((item) => [item.id, item.owner?.id]),
+    invites: (room.myInvites || []).map((draft) => [
+      draft.id,
+      ...(draft.participants || []).map((person) => `${person.id}:${person.status}`),
+    ]),
+    drafts: (room.myDrafts || []).map((draft) => [
+      draft.id,
+      ...(draft.participants || []).map((person) => `${person.id}:${person.status}`),
+    ]),
+  });
+}
+
+function renderLibraryPreservingSearch() {
+  const input = document.querySelector("#search");
+  const hadFocus = document.activeElement === input;
+  const selectionStart = input?.selectionStart ?? state.query.length;
+  const selectionEnd = input?.selectionEnd ?? selectionStart;
+
+  renderLibrary();
+
+  if (!hadFocus) return;
+
+  const nextInput = document.querySelector("#search");
+  if (!nextInput) return;
+
+  requestAnimationFrame(() => {
+    nextInput.focus({ preventScroll: true });
+    const max = nextInput.value.length;
+    nextInput.setSelectionRange(
+      Math.min(selectionStart, max),
+      Math.min(selectionEnd, max),
+    );
+  });
+}
+
+function setSearchBusy(busy) {
+  state.searching = busy;
+  const box = document.querySelector(".searchbox");
+  if (!box) return;
+
+  let spinner = box.querySelector(".tiny-spinner");
+  const kbd = box.querySelector("kbd");
+
+  if (busy) {
+    if (kbd) kbd.remove();
+    if (!spinner) {
+      spinner = document.createElement("i");
+      spinner.className = "tiny-spinner";
+      box.appendChild(spinner);
+    }
+  } else {
+    spinner?.remove();
+    if (!box.querySelector("kbd")) {
+      const hint = document.createElement("kbd");
+      hint.textContent = "Enter";
+      box.appendChild(hint);
+    }
+  }
 }
 
 function render() {
@@ -395,13 +469,17 @@ function bindLibrary() {
   input?.addEventListener("input", () => {
     state.query = input.value;
     clearTimeout(state.searchTimer);
+
     if (state.query.trim().length < 2) {
       state.results = [];
-      state.searching = false;
-      render();
+      setSearchBusy(false);
+      renderLibraryPreservingSearch();
       return;
     }
-    state.searchTimer = setTimeout(() => doSearch(state.query), 320);
+
+    // Не перерисовываем Activity на каждую букву.
+    // Запрос запускается только после короткой паузы в наборе.
+    state.searchTimer = setTimeout(() => doSearch(state.query), 420);
   });
 
   input?.addEventListener("keydown", (event) => {
@@ -454,8 +532,7 @@ async function doSearch(query) {
   if (q.length < 2) return;
 
   state.query = q;
-  state.searching = true;
-  render();
+  setSearchBusy(true);
 
   const requestQuery = q;
   try {
@@ -471,8 +548,8 @@ async function doSearch(query) {
     toast("Поиск временно не сработал", "error");
   } finally {
     if (state.query === requestQuery) {
-      state.searching = false;
-      render();
+      setSearchBusy(false);
+      renderLibraryPreservingSearch();
     }
   }
 }
@@ -503,88 +580,131 @@ async function addSolo() {
 async function openDuetModal() {
   if (!state.selected) return;
 
-  try {
-    const data = await api(`/api/voice/members?guildId=${encodeURIComponent(state.guildId)}`);
-    const others = (data.members || []).filter((member) => member.id !== myId());
+  // Модалка живёт вне #app, поэтому фоновые обновления Activity
+  // больше не могут случайно её удалить.
+  document.querySelector("#duetGlobalRoot")?.remove();
 
-    const root = document.querySelector("#modalRoot");
-    root.innerHTML = `
+  const globalRoot = document.createElement("div");
+  globalRoot.id = "duetGlobalRoot";
+  document.body.appendChild(globalRoot);
+
+  const close = () => globalRoot.remove();
+
+  const drawShell = (content) => {
+    globalRoot.innerHTML = `
       <div class="modal-backdrop" id="duetBackdrop">
         <section class="modal">
           <div class="modal-head">
             <div>
               <small>ДУО / ГРУППА</small>
               <h2>Кого позвать?</h2>
-              <p>Можно пригласить до трёх человек. Петь будут только те, кто сам нажмёт «Принять».</p>
+              <p>До трёх приглашённых. Никого не заставляем: каждый сам принимает инвайт.</p>
             </div>
             <button id="closeDuet" class="icon-button">×</button>
           </div>
-
-          <div class="member-list">
-            ${others.length ? others.map((member) => `
-              <label class="member-row">
-                <input type="checkbox" value="${member.id}" data-duet-member>
-                <div class="member-avatar">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(member.name.slice(0,1))}</div>
-                <div><strong>${escapeHtml(member.name)}</strong><span>в ${escapeHtml(data.channelName)}</span></div>
-              </label>
-            `).join("") : `<div class="modal-empty">В твоём voice сейчас больше никого нет.</div>`}
-          </div>
-
-          <div class="together-note">
-            <b>🎶 Части вместе</b>
-            <span>Повторяющиеся припевы и хуки автоматически получают режим «ВСЕ» и окрашиваются цветами всех певцов.</span>
-          </div>
-
-          <button id="sendDuetInvites" class="primary wide" ${others.length ? "" : "disabled"}>Отправить инвайты</button>
+          ${content}
         </section>
       </div>
     `;
 
-    const close = () => root.replaceChildren();
     document.querySelector("#closeDuet")?.addEventListener("click", close);
-    document.querySelector("#duetBackdrop")?.addEventListener("click", (e) => {
-      if (e.target.id === "duetBackdrop") close();
+    document.querySelector("#duetBackdrop")?.addEventListener("click", (event) => {
+      if (event.target.id === "duetBackdrop") close();
     });
+  };
 
-    document.querySelector("#sendDuetInvites")?.addEventListener("click", async () => {
-      const selectedIds = [...document.querySelectorAll("[data-duet-member]:checked")]
-        .map((input) => input.value)
-        .slice(0, 3);
+  drawShell(`
+    <div class="modal-loading">
+      <div class="spinner"></div>
+      <span>Смотрим, кто сейчас в voice…</span>
+    </div>
+  `);
 
-      if (!selectedIds.length) {
-        toast("Выбери хотя бы одного человека", "warn");
-        return;
-      }
-
-      try {
-        await api("/api/duet/create", {
-          method: "POST",
-          body: JSON.stringify({
-            guildId: state.guildId,
-            track: trackPayload(state.selected),
-            inviteeIds: selectedIds,
-          }),
-        });
-        close();
-        await refreshRoom(true);
-        toast("Инвайты отправлены", "ok");
-      } catch (error) {
-        toast(errorMessage(error.message), "error");
-      }
-    });
-
-    document.querySelectorAll("[data-duet-member]").forEach((input) => {
-      input.addEventListener("change", () => {
-        const checked = [...document.querySelectorAll("[data-duet-member]:checked")];
-        if (checked.length > 3) {
-          input.checked = false;
-          toast("Максимум 4 певца вместе с тобой", "warn");
-        }
-      });
-    });
+  let data;
+  try {
+    data = await api(`/api/voice/members?guildId=${encodeURIComponent(state.guildId)}`);
   } catch (error) {
-    toast(errorMessage(error.message), "error");
+    drawShell(`
+      <div class="modal-empty duet-empty-state">
+        <div>👥</div>
+        <strong>Пока некого приглашать</strong>
+        <span>${escapeHtml(errorMessage(error.message))}</span>
+      </div>
+      <div class="together-note">
+        <b>🎶 Дуо всё равно доступно</b>
+        <span>Зайди в разрешённый voice или дождись друзей — окно больше не будет само закрываться.</span>
+      </div>
+      <button id="duetOkay" class="secondary wide">Понятно</button>
+    `);
+    document.querySelector("#duetOkay")?.addEventListener("click", close);
+    return;
   }
+
+  const others = (data.members || []).filter((member) => member.id !== myId());
+
+  drawShell(`
+    <div class="member-list">
+      ${others.length ? others.map((member) => `
+        <label class="member-row">
+          <input type="checkbox" value="${member.id}" data-duet-member>
+          <div class="member-avatar">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(member.name.slice(0,1))}</div>
+          <div><strong>${escapeHtml(member.name)}</strong><span>в ${escapeHtml(data.channelName)}</span></div>
+        </label>
+      `).join("") : `
+        <div class="modal-empty duet-empty-state">
+          <div>🎙</div>
+          <strong>Ты пока один в voice</strong>
+          <span>Окно останется открытым. Когда кто-то зайдёт, закрой и открой его снова.</span>
+        </div>
+      `}
+    </div>
+
+    <div class="together-note">
+      <b>🎶 Части вместе</b>
+      <span>Повторяющиеся припевы и хуки автоматически получают режим «ВСЕ» и окрашиваются цветами всех певцов.</span>
+    </div>
+
+    <button id="sendDuetInvites" class="primary wide" ${others.length ? "" : "disabled"}>
+      ${others.length ? "Отправить инвайты" : "Некого приглашать"}
+    </button>
+  `);
+
+  document.querySelector("#sendDuetInvites")?.addEventListener("click", async () => {
+    const selectedIds = [...document.querySelectorAll("[data-duet-member]:checked")]
+      .map((input) => input.value)
+      .slice(0, 3);
+
+    if (!selectedIds.length) {
+      toast("Выбери хотя бы одного человека", "warn");
+      return;
+    }
+
+    try {
+      await api("/api/duet/create", {
+        method: "POST",
+        body: JSON.stringify({
+          guildId: state.guildId,
+          track: trackPayload(state.selected),
+          inviteeIds: selectedIds,
+        }),
+      });
+      close();
+      await refreshRoom(true);
+      toast("Инвайты отправлены", "ok");
+    } catch (error) {
+      toast(errorMessage(error.message), "error");
+    }
+  });
+
+  document.querySelectorAll("[data-duet-member]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const checked = [...document.querySelectorAll("[data-duet-member]:checked")];
+      if (checked.length > 3) {
+        input.checked = false;
+        toast("Максимум 4 певца вместе с тобой", "warn");
+      }
+    });
+  });
 }
 
 async function respondInvite(draftId, accept) {
@@ -892,9 +1012,10 @@ async function refreshRoom(shouldRender = false) {
   if (!state.guildId || !state.accessToken) return;
 
   try {
-    const data = await api(`/api/room/state?guildId=${encodeURIComponent(state.guildId)}`);
     const oldCurrentId = state.room.current?.id;
+    const oldSignature = state.roomSignature || roomSignature(state.room);
 
+    const data = await api(`/api/room/state?guildId=${encodeURIComponent(state.guildId)}`);
     state.room = {
       current: data.current
         ? { ...data.current, sampledAt: performance.now() }
@@ -903,6 +1024,10 @@ async function refreshRoom(shouldRender = false) {
       myInvites: data.myInvites || [],
       myDrafts: data.myDrafts || [],
     };
+
+    const newSignature = roomSignature(state.room);
+    const roomChanged = oldSignature !== newSignature;
+    state.roomSignature = newSignature;
 
     if (state.mode === "karaoke") {
       if (!state.room.current) {
@@ -922,7 +1047,9 @@ async function refreshRoom(shouldRender = false) {
       return;
     }
 
-    if (shouldRender) render();
+    if (shouldRender || roomChanged) {
+      renderLibraryPreservingSearch();
+    }
   } catch (error) {
     console.debug("room poll", error);
   }
@@ -974,7 +1101,7 @@ async function initDiscord() {
   await refreshRoom(false);
   render();
 
-  state.roomPoll = setInterval(() => refreshRoom(state.mode === "library"), 850);
+  state.roomPoll = setInterval(() => refreshRoom(false), 850);
   state.visualTimer = setInterval(updateKaraokeVisuals, 80);
 }
 
