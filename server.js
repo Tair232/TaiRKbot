@@ -5,9 +5,14 @@ import { fileURLToPath } from "node:url";
 import { build as viteBuild } from "vite";
 import {
   getBotState,
+  getKaraokeState,
   joinUsersVoiceChannel,
   leaveVoiceChannel,
+  pauseKaraoke,
+  resumeKaraoke,
   startBot,
+  startKaraoke,
+  stopKaraoke,
 } from "./bot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,7 +57,6 @@ app.post("/api/token", async (req, res) => {
       return res.status(502).json({ error: "OAUTH_EXCHANGE_FAILED" });
     }
 
-    // Не логируем и не сохраняем access token.
     res.json({ access_token: data.access_token });
   } catch (error) {
     console.error("[OAUTH]", error);
@@ -116,9 +120,8 @@ async function searchLrclib(query) {
   const cached = searchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < 5 * 60_000) return cached.data;
 
-  // LRCLIB просит не спамить запросами: минимальный небольшой интервал.
   const elapsed = Date.now() - lastLrclibRequestAt;
-  if (elapsed < 350) await new Promise((r) => setTimeout(r, 350 - elapsed));
+  if (elapsed < 350) await new Promise((resolve) => setTimeout(resolve, 350 - elapsed));
   lastLrclibRequestAt = Date.now();
 
   const url = new URL("https://lrclib.net/api/search");
@@ -126,17 +129,17 @@ async function searchLrclib(query) {
 
   let response = await fetch(url, {
     headers: {
-      "User-Agent": `RussianKaraokeDiscord/0.1 (Discord app ${CLIENT_ID})`,
+      "User-Agent": `RussianKaraokeDiscord/0.2 (Discord app ${CLIENT_ID})`,
       Accept: "application/json",
     },
   });
 
   if (response.status === 429) {
     const retryAfter = Math.min(Number(response.headers.get("retry-after") || 1), 5);
-    await new Promise((r) => setTimeout(r, retryAfter * 1000));
+    await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
     response = await fetch(url, {
       headers: {
-        "User-Agent": `RussianKaraokeDiscord/0.1 (Discord app ${CLIENT_ID})`,
+        "User-Agent": `RussianKaraokeDiscord/0.2 (Discord app ${CLIENT_ID})`,
         Accept: "application/json",
       },
     });
@@ -171,6 +174,25 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
+function cleanTrackPayload(input) {
+  const title = String(input?.title || "").trim().slice(0, 180);
+  const artist = String(input?.artist || "").trim().slice(0, 180);
+  if (!title || !artist) throw new Error("TRACK_INVALID");
+
+  return {
+    id: Number.isFinite(Number(input?.id)) ? Number(input.id) : null,
+    title,
+    artist,
+    album: String(input?.album || "").trim().slice(0, 180),
+    duration: Math.max(0, Math.min(Number(input?.duration) || 0, 60 * 60)),
+    instrumental: Boolean(input?.instrumental),
+  };
+}
+
+function authStatus(code) {
+  return ["AUTH_REQUIRED", "AUTH_INVALID"].includes(code) ? 401 : 400;
+}
+
 app.post("/api/voice/join", async (req, res) => {
   try {
     const user = await discordUserFromRequest(req);
@@ -181,9 +203,8 @@ app.post("/api/voice/join", async (req, res) => {
     res.json({ ok: true, user: { id: user.id, username: user.username }, ...joined });
   } catch (error) {
     const code = error?.message || "VOICE_JOIN_FAILED";
-    const status = ["AUTH_REQUIRED", "AUTH_INVALID"].includes(code) ? 401 : 400;
     console.error("[VOICE JOIN]", code);
-    res.status(status).json({ error: code });
+    res.status(authStatus(code)).json({ error: code });
   }
 });
 
@@ -195,9 +216,49 @@ app.post("/api/voice/leave", async (req, res) => {
     res.json({ ok: true, disconnected: leaveVoiceChannel(guildId) });
   } catch (error) {
     const code = error?.message || "VOICE_LEAVE_FAILED";
-    res.status(code.startsWith("AUTH_") ? 401 : 400).json({ error: code });
+    res.status(authStatus(code)).json({ error: code });
   }
 });
+
+app.post("/api/karaoke/start", async (req, res) => {
+  try {
+    const user = await discordUserFromRequest(req);
+    const guildId = String(req.body?.guildId || "");
+    if (!guildId) return res.status(400).json({ error: "GUILD_REQUIRED" });
+
+    const track = cleanTrackPayload(req.body?.track);
+    const session = await startKaraoke(guildId, user.id, track);
+    res.json({ ok: true, ...session });
+  } catch (error) {
+    const code = error?.message || "KARAOKE_START_FAILED";
+    console.error("[KARAOKE START]", code, error?.cause || "");
+    res.status(authStatus(code)).json({ error: code });
+  }
+});
+
+app.get("/api/karaoke/state", (req, res) => {
+  const guildId = String(req.query.guildId || "");
+  if (!guildId) return res.status(400).json({ error: "GUILD_REQUIRED" });
+  res.json({ ok: true, ...getKaraokeState(guildId) });
+});
+
+for (const [route, handler] of [
+  ["pause", pauseKaraoke],
+  ["resume", resumeKaraoke],
+  ["stop", stopKaraoke],
+]) {
+  app.post(`/api/karaoke/${route}`, async (req, res) => {
+    try {
+      await discordUserFromRequest(req);
+      const guildId = String(req.body?.guildId || "");
+      if (!guildId) return res.status(400).json({ error: "GUILD_REQUIRED" });
+      res.json({ ok: true, ...handler(guildId) });
+    } catch (error) {
+      const code = error?.message || `KARAOKE_${route.toUpperCase()}_FAILED`;
+      res.status(authStatus(code)).json({ error: code });
+    }
+  });
+}
 
 async function buildActivity() {
   console.log("[WEB] Собираю Discord Activity...");
