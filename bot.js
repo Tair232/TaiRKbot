@@ -162,6 +162,8 @@ function ensureSession(guildId) {
     referencePitches: [],
     referenceStream: null,
     capture: null,
+    singerPitch: null,
+    singerPitchSeq: 0,
     score: freshScore(),
   };
 
@@ -238,6 +240,126 @@ function publicScore(session) {
   };
 }
 
+
+function hzToMidi(hz) {
+  if (!(hz > 0)) return null;
+  return 69 + 12 * Math.log2(hz / 440);
+}
+
+function noteNameFromMidi(value) {
+  if (!Number.isFinite(value)) return "";
+  const midi = Math.round(value);
+  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+function lowerBoundPitch(points, timeMs) {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (points[mid].timeMs < timeMs) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function publicPitchGuide(session, positionMs) {
+  const points = session?.referencePitches || [];
+  if (!points.length) {
+    return {
+      ready: false,
+      fromMs: Math.max(0, positionMs - 2400),
+      toMs: positionMs + 6500,
+      segments: [],
+    };
+  }
+
+  const fromMs = Math.max(0, positionMs - 2400);
+  const toMs = positionMs + 6500;
+  let index = Math.max(0, lowerBoundPitch(points, fromMs) - 3);
+  const prepared = [];
+
+  while (index < points.length) {
+    const point = points[index];
+    if (point.timeMs > toMs) break;
+
+    if (point.timeMs >= fromMs && point.confidence >= 0.26) {
+      const around = [];
+      for (let j = Math.max(0, index - 2); j <= Math.min(points.length - 1, index + 2); j += 1) {
+        const candidate = points[j];
+        if (Math.abs(candidate.timeMs - point.timeMs) <= 180 && candidate.confidence >= 0.22) {
+          const midi = hzToMidi(candidate.hz);
+          if (Number.isFinite(midi) && midi >= 30 && midi <= 96) around.push(midi);
+        }
+      }
+
+      const smoothMidi = median(around);
+      if (Number.isFinite(smoothMidi)) {
+        prepared.push({
+          timeMs: point.timeMs,
+          midi: Math.round(smoothMidi),
+          confidence: point.confidence,
+        });
+      }
+    }
+    index += 1;
+  }
+
+  const segments = [];
+  const STEP_MS = (ANALYSIS_STEP / ANALYSIS_RATE) * 1000;
+
+  for (const point of prepared) {
+    const last = segments.at(-1);
+    if (
+      last &&
+      last.midi === point.midi &&
+      point.timeMs - last.endMs <= 190
+    ) {
+      last.endMs = point.timeMs + STEP_MS * 0.72;
+      last.confidence = Math.max(last.confidence, point.confidence);
+    } else {
+      segments.push({
+        startMs: Math.max(fromMs, point.timeMs - STEP_MS * 0.35),
+        endMs: point.timeMs + STEP_MS * 0.72,
+        midi: point.midi,
+        note: noteNameFromMidi(point.midi),
+        confidence: point.confidence,
+      });
+    }
+  }
+
+  // Убираем совсем короткий шум и слегка склеиваем соседние куски одной ноты.
+  const cleaned = [];
+  for (const segment of segments) {
+    if (segment.endMs - segment.startMs < 90) continue;
+    const last = cleaned.at(-1);
+    if (
+      last &&
+      last.midi === segment.midi &&
+      segment.startMs - last.endMs <= 150
+    ) {
+      last.endMs = segment.endMs;
+      last.confidence = Math.max(last.confidence, segment.confidence);
+    } else {
+      cleaned.push({ ...segment });
+    }
+  }
+
+  return {
+    ready: cleaned.length > 0,
+    fromMs,
+    toMs,
+    segments: cleaned.slice(-90),
+  };
+}
+
 function publicSession(session) {
   if (!session) {
     return {
@@ -260,6 +382,8 @@ function publicSession(session) {
     channelName: session.channelName,
     countdownEndsAt: session.countdownEndsAt,
     score: publicScore(session),
+    singerPitch: session.singerPitch,
+    noteGuide: publicPitchGuide(session, currentPositionMs(session)),
     error: session.error,
     updatedAt: session.updatedAt,
   };
@@ -416,7 +540,18 @@ function timingPoints(offsetMs) {
 
 function addSingerPitch(session, pitch) {
   if (session.status !== "playing") return;
+
   const positionMs = currentPositionMs(session);
+  session.singerPitchSeq += 1;
+  session.singerPitch = {
+    seq: session.singerPitchSeq,
+    positionMs: Math.round(positionMs),
+    hz: Math.round(pitch.hz * 10) / 10,
+    midi: Math.round(hzToMidi(pitch.hz) * 100) / 100,
+    note: noteNameFromMidi(hzToMidi(pitch.hz)),
+    confidence: Math.round(pitch.confidence * 100),
+  };
+
   const match = findReferenceMatches(session.referencePitches, positionMs, pitch.hz);
   if (!match) return;
 
@@ -444,6 +579,12 @@ function addSingerPitch(session, pitch) {
     cents: Math.round(match.cents),
     combo: score.combo,
     accuracy: Math.round(score.pitchSum / score.compared),
+    userHz: Math.round(pitch.hz * 10) / 10,
+    userMidi: Math.round(hzToMidi(pitch.hz) * 100) / 100,
+    targetHz: Math.round(match.hz * 10) / 10,
+    targetMidi: Math.round(hzToMidi(match.hz) * 100) / 100,
+    targetNote: noteNameFromMidi(hzToMidi(match.hz)),
+    positionMs: Math.round(positionMs),
   };
 }
 
@@ -594,6 +735,8 @@ function resetSessionForTrack(session, track, joined, userId) {
   session.error = null;
   session.lastPositionMs = 0;
   session.referencePitches = [];
+  session.singerPitch = null;
+  session.singerPitchSeq = 0;
   session.score = freshScore();
   session.generation += 1;
   session.updatedAt = Date.now();
