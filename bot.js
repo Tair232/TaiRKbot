@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { Client, GatewayIntentBits, ActivityType } from "discord.js";
 import {
   AudioPlayerStatus,
-  EndBehaviorType,
   NoSubscriberBehavior,
   VoiceConnectionStatus,
   createAudioPlayer,
@@ -10,7 +10,6 @@ import {
   getVoiceConnection,
   joinVoiceChannel,
 } from "@discordjs/voice";
-import prism from "prism-media";
 import { resolveAudio } from "./audio-provider.js";
 
 const token =
@@ -19,16 +18,14 @@ const token =
   process.env.BOT_TOKEN;
 
 const COUNTDOWN_MS = 3000;
-const ANALYSIS_RATE = 16000;
-const ANALYSIS_WINDOW = 2048;
-const ANALYSIS_STEP = 1024;
+const SINGER_COLORS = ["#a970ff", "#45d9ff", "#ff9d4d", "#5ee08b"];
 
 export const bot = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
 
 let loginPromise = null;
-const karaokeSessions = new Map();
+const rooms = new Map();
 
 export async function startBot() {
   if (!token) {
@@ -40,15 +37,11 @@ export async function startBot() {
   if (loginPromise) return loginPromise;
 
   loginPromise = new Promise((resolve, reject) => {
-    const onReady = () => {
-      bot.user.setActivity("Русское караоке 🎤", {
-        type: ActivityType.Playing,
-      });
+    bot.once("clientReady", () => {
+      bot.user.setActivity("Русское караоке 🎤", { type: ActivityType.Playing });
       console.log(`[BOT] Вошёл как ${bot.user.tag}`);
       resolve(true);
-    };
-
-    bot.once("clientReady", onReady);
+    });
     bot.login(token).catch(reject);
   }).finally(() => {
     loginPromise = null;
@@ -57,19 +50,302 @@ export async function startBot() {
   return loginPromise;
 }
 
+function userLabel(memberOrUser) {
+  return (
+    memberOrUser?.displayName ||
+    memberOrUser?.globalName ||
+    memberOrUser?.username ||
+    "Discord"
+  );
+}
+
+function roomFor(guildId) {
+  let room = rooms.get(guildId);
+  if (room) return room;
+
+  const player = createAudioPlayer({
+    behaviors: { noSubscriber: NoSubscriberBehavior.Pause },
+  });
+
+  room = {
+    guildId,
+    player,
+    current: null,
+    queue: [],
+    drafts: new Map(),
+    advancing: false,
+  };
+
+  player.on(AudioPlayerStatus.Buffering, () => {
+    if (room.current && room.current.status !== "countdown") {
+      room.current.status = "buffering";
+      room.current.updatedAt = Date.now();
+    }
+  });
+
+  player.on(AudioPlayerStatus.Playing, () => {
+    if (!room.current) return;
+    room.current.status = "playing";
+    room.current.countdownEndsAt = null;
+    room.current.updatedAt = Date.now();
+  });
+
+  player.on(AudioPlayerStatus.Paused, () => {
+    if (!room.current) return;
+    room.current.status = "paused";
+    room.current.updatedAt = Date.now();
+  });
+
+  player.on(AudioPlayerStatus.AutoPaused, () => {
+    if (!room.current) return;
+    room.current.status = "paused";
+    room.current.updatedAt = Date.now();
+  });
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    const current = room.current;
+    if (!current) return;
+
+    if (!["stopped", "error"].includes(current.status)) {
+      current.lastPositionMs = currentPositionMs(current);
+      current.status = "finished";
+      current.updatedAt = Date.now();
+    }
+
+    const currentId = current.id;
+    setTimeout(() => {
+      if (room.current?.id !== currentId) return;
+      room.current = null;
+      void advanceQueue(room);
+    }, 850);
+  });
+
+  player.on("error", (error) => {
+    console.error(`[AUDIO ${guildId}]`, error);
+    if (!room.current) return;
+    room.current.lastPositionMs = currentPositionMs(room.current);
+    room.current.status = "error";
+    room.current.error = error?.message || "AUDIO_PLAYER_ERROR";
+    room.current.updatedAt = Date.now();
+
+    const currentId = room.current.id;
+    setTimeout(() => {
+      if (room.current?.id !== currentId) return;
+      room.current = null;
+      void advanceQueue(room);
+    }, 900);
+  });
+
+  rooms.set(guildId, room);
+  return room;
+}
+
+function publicTrack(track) {
+  if (!track) return null;
+  return {
+    id: track.id ?? null,
+    title: track.title,
+    artist: track.artist,
+    album: track.album || "",
+    duration: Number(track.duration) || 0,
+    instrumental: Boolean(track.instrumental),
+    hasLyrics: Boolean(track.plainLyrics || track.syncedLyrics),
+    hasSyncedLyrics: Boolean(track.syncedLyrics),
+  };
+}
+
+function publicSinger(singer, index = 0) {
+  return {
+    id: singer.id,
+    name: singer.name || "Discord",
+    color: singer.color || SINGER_COLORS[index % SINGER_COLORS.length],
+  };
+}
+
+function currentPositionMs(current) {
+  const live = Math.max(0, Number(current?.resource?.playbackDuration) || 0);
+  if (current && live > 0) current.lastPositionMs = live;
+  return Math.max(0, live || Number(current?.lastPositionMs) || 0);
+}
+
+function parseSyncedLyrics(source = "") {
+  return String(source)
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$/);
+      if (!match) return null;
+      const minutes = Number(match[1]);
+      const seconds = Number(match[2]);
+      const fraction = Number((match[3] || "0").padEnd(3, "0").slice(0, 3));
+      return {
+        timeMs: (minutes * 60 + seconds) * 1000 + fraction,
+        text: match[4].trim() || "♪",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.timeMs - b.timeMs);
+}
+
+function parsePlainLyrics(source = "") {
+  return String(source)
+    .split("\n")
+    .map((line) => line.replace(/^\[\d{1,3}:\d{2}(?:[.:]\d+)?\]\s*/, "").trim())
+    .filter(Boolean)
+    .map((text, index) => ({ text, index }));
+}
+
+function normalizeLyric(value = "") {
+  return String(value)
+    .toLocaleLowerCase("ru-RU")
+    .replaceAll("ё", "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function buildLyricPlan(track, singers) {
+  const safeSingers = singers.length
+    ? singers.slice(0, 4).map((singer, index) => ({
+        ...singer,
+        color: SINGER_COLORS[index],
+      }))
+    : [];
+
+  const synced = parseSyncedLyrics(track.syncedLyrics || "");
+  const source = synced.length ? synced : parsePlainLyrics(track.plainLyrics || "");
+  const allIds = safeSingers.map((singer) => singer.id);
+
+  if (!source.length) {
+    return {
+      synced: false,
+      singers: safeSingers.map(publicSinger),
+      lines: [],
+    };
+  }
+
+  const frequency = new Map();
+  for (const line of source) {
+    const key = normalizeLyric(line.text);
+    if (key.length >= 4) frequency.set(key, (frequency.get(key) || 0) + 1);
+  }
+
+  const occurrence = new Map();
+  const lineBlock = safeSingers.length >= 4 ? 4 : safeSingers.length === 3 ? 5 : 6;
+  let sectionSinger = 0;
+  let inBlock = 0;
+  let previousTime = null;
+
+  const lines = source.map((line, index) => {
+    const key = normalizeLyric(line.text);
+    const repeatCount = frequency.get(key) || 0;
+    const repeatIndex = occurrence.get(key) || 0;
+    occurrence.set(key, repeatIndex + 1);
+
+    const gap =
+      synced.length && previousTime != null
+        ? Number(line.timeMs) - Number(previousTime)
+        : 0;
+
+    const strongBreak = index > 0 && (gap > 3400 || inBlock >= lineBlock);
+    if (strongBreak) {
+      sectionSinger = safeSingers.length
+        ? (sectionSinger + 1) % safeSingers.length
+        : 0;
+      inBlock = 0;
+    }
+
+    const hookLike =
+      /^(о+|а+|эй|ла[\s-]?ла|на[\s-]?на|у+|yeah|hey)\b/i.test(key);
+
+    // Повторяющийся припев: первая версия идёт одному человеку,
+    // вторая/четвёртая и т.д. — всем вместе.
+    const together =
+      safeSingers.length > 1 &&
+      (
+        hookLike ||
+        (repeatCount >= 2 && repeatIndex % 2 === 1)
+      );
+
+    const singerIds = together
+      ? allIds
+      : safeSingers.length
+        ? [safeSingers[sectionSinger].id]
+        : [];
+
+    if (!together) inBlock += 1;
+    if (synced.length) previousTime = Number(line.timeMs);
+
+    return {
+      index,
+      timeMs: synced.length ? Number(line.timeMs) : null,
+      text: line.text,
+      singerIds,
+      together,
+    };
+  });
+
+  return {
+    synced: Boolean(synced.length),
+    singers: safeSingers.map(publicSinger),
+    lines,
+  };
+}
+
+function publicCurrent(current) {
+  if (!current) return null;
+  return {
+    id: current.id,
+    status: current.status,
+    positionMs: currentPositionMs(current),
+    track: publicTrack(current.track),
+    source: current.source,
+    owner: current.owner,
+    singers: current.singers.map(publicSinger),
+    lyricPlan: current.lyricPlan,
+    channelId: current.channelId,
+    channelName: current.channelName,
+    countdownEndsAt: current.countdownEndsAt,
+    error: current.error,
+    updatedAt: current.updatedAt,
+  };
+}
+
+function publicQueueItem(item, position) {
+  return {
+    id: item.id,
+    position,
+    owner: item.owner,
+    track: publicTrack(item.track),
+    singers: item.singers.map(publicSinger),
+    createdAt: item.createdAt,
+  };
+}
+
+function publicDraft(draft) {
+  return {
+    id: draft.id,
+    owner: draft.owner,
+    track: publicTrack(draft.track),
+    participants: draft.participants.map((person, index) => ({
+      id: person.id,
+      name: person.name,
+      status: person.status,
+      color: SINGER_COLORS[index % SINGER_COLORS.length],
+    })),
+    createdAt: draft.createdAt,
+  };
+}
+
 export function getBotState() {
   return {
     ready: bot.isReady(),
     user: bot.user
       ? { id: bot.user.id, username: bot.user.username, tag: bot.user.tag }
       : null,
-    activeKaraokeSessions: [...karaokeSessions.values()].filter((session) =>
-      ["resolving", "countdown", "buffering", "playing", "paused"].includes(session.status),
-    ).length,
+    activeKaraokeSessions: [...rooms.values()].filter((room) => room.current).length,
   };
 }
 
-export async function joinUsersVoiceChannel(guildId, userId) {
+async function guildAndVoiceMember(guildId, userId) {
   if (!bot.isReady()) throw new Error("BOT_NOT_READY");
 
   const guild = bot.guilds.cache.get(guildId);
@@ -77,8 +353,14 @@ export async function joinUsersVoiceChannel(guildId, userId) {
 
   const voiceState = guild.voiceStates.cache.get(userId);
   const channel = voiceState?.channel;
-
   if (!channel) throw new Error("USER_NOT_IN_VOICE");
+
+  return { guild, voiceState, channel };
+}
+
+export async function joinUsersVoiceChannel(guildId, userId) {
+  const { guild, channel } = await guildAndVoiceMember(guildId, userId);
+
   if (!channel.joinable) throw new Error("CHANNEL_NOT_JOINABLE");
   if (!channel.speakable) throw new Error("CHANNEL_NOT_SPEAKABLE");
 
@@ -93,8 +375,7 @@ export async function joinUsersVoiceChannel(guildId, userId) {
     channelId: channel.id,
     guildId: guild.id,
     adapterCreator: guild.voiceAdapterCreator,
-    // Обязательно false: receiver нужен для оценки голоса певца.
-    selfDeaf: false,
+    selfDeaf: true,
     selfMute: false,
   });
 
@@ -108,747 +389,407 @@ export async function joinUsersVoiceChannel(guildId, userId) {
   return { channelId: channel.id, channelName: channel.name, reused: false };
 }
 
-function currentPositionMs(session) {
-  const live = Math.max(0, Number(session.resource?.playbackDuration) || 0);
-  if (live > 0) session.lastPositionMs = live;
-  return Math.max(0, live || Number(session.lastPositionMs) || 0);
-}
-
-function freshScore() {
+export async function getVoiceMembers(guildId, userId) {
+  const { channel } = await guildAndVoiceMember(guildId, userId);
   return {
-    compared: 0,
-    pitchSum: 0,
-    timingSum: 0,
-    confidenceSum: 0,
-    perfect: 0,
-    great: 0,
-    good: 0,
-    miss: 0,
-    combo: 0,
-    maxCombo: 0,
-    live: null,
-    startedAt: null,
-    finalized: false,
-    result: null,
+    channelId: channel.id,
+    channelName: channel.name,
+    members: [...channel.members.values()]
+      .filter((member) => !member.user.bot)
+      .map((member) => ({
+        id: member.id,
+        name: userLabel(member),
+        avatar:
+          member.user.displayAvatarURL?.({ size: 64, extension: "png" }) || null,
+      })),
   };
 }
 
-function ensureSession(guildId) {
-  let session = karaokeSessions.get(guildId);
-  if (session) return session;
+function publicRoom(room, userId) {
+  const myInvites = [];
+  const myDrafts = [];
 
-  const player = createAudioPlayer({
-    behaviors: {
-      noSubscriber: NoSubscriberBehavior.Pause,
-    },
-  });
+  for (const draft of room.drafts.values()) {
+    if (draft.owner.id === userId) myDrafts.push(publicDraft(draft));
 
-  session = {
-    guildId,
-    player,
-    resource: null,
-    status: "idle",
-    track: null,
-    source: null,
-    channelId: null,
-    channelName: null,
-    singerId: null,
-    error: null,
-    updatedAt: Date.now(),
-    countdownEndsAt: null,
-    countdownTimer: null,
-    generation: 0,
-    lastPositionMs: 0,
-    referencePitches: [],
-    referenceStream: null,
-    capture: null,
-    singerPitch: null,
-    singerPitchSeq: 0,
-    score: freshScore(),
-  };
-
-  player.on(AudioPlayerStatus.Buffering, () => {
-    if (session.status !== "countdown") session.status = "buffering";
-    session.updatedAt = Date.now();
-  });
-
-  player.on(AudioPlayerStatus.Playing, () => {
-    session.status = "playing";
-    session.countdownEndsAt = null;
-    session.score.startedAt ||= Date.now();
-    session.updatedAt = Date.now();
-  });
-
-  player.on(AudioPlayerStatus.Paused, () => {
-    session.status = "paused";
-    session.updatedAt = Date.now();
-  });
-
-  player.on(AudioPlayerStatus.AutoPaused, () => {
-    session.status = "paused";
-    session.updatedAt = Date.now();
-  });
-
-  player.on(AudioPlayerStatus.Idle, () => {
-    currentPositionMs(session);
-    if (!["stopped", "error", "idle"].includes(session.status)) {
-      session.status = "finished";
-      finalizeScore(session);
-    }
-    stopSingerCapture(session);
-    session.updatedAt = Date.now();
-  });
-
-  player.on("error", (error) => {
-    console.error(`[AUDIO ${guildId}]`, error);
-    currentPositionMs(session);
-    session.status = "error";
-    session.error = error?.message || "AUDIO_PLAYER_ERROR";
-    stopSingerCapture(session);
-    session.updatedAt = Date.now();
-  });
-
-  karaokeSessions.set(guildId, session);
-  return session;
-}
-
-function publicTrack(track) {
-  if (!track) return null;
-  return {
-    id: track.id ?? null,
-    title: track.title,
-    artist: track.artist,
-    album: track.album || "",
-    duration: Number(track.duration) || 0,
-    instrumental: Boolean(track.instrumental),
-  };
-}
-
-function publicScore(session) {
-  const score = session?.score;
-  if (!score) return null;
-  return {
-    compared: score.compared,
-    combo: score.combo,
-    maxCombo: score.maxCombo,
-    perfect: score.perfect,
-    great: score.great,
-    good: score.good,
-    miss: score.miss,
-    live: score.live,
-    result: score.result,
-  };
-}
-
-
-function hzToMidi(hz) {
-  if (!(hz > 0)) return null;
-  return 69 + 12 * Math.log2(hz / 440);
-}
-
-function noteNameFromMidi(value) {
-  if (!Number.isFinite(value)) return "";
-  const midi = Math.round(value);
-  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-  return `${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
-}
-
-function lowerBoundPitch(points, timeMs) {
-  let low = 0;
-  let high = points.length;
-  while (low < high) {
-    const mid = (low + high) >> 1;
-    if (points[mid].timeMs < timeMs) low = mid + 1;
-    else high = mid;
-  }
-  return low;
-}
-
-function median(values) {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
-
-function publicPitchGuide(session, positionMs) {
-  const points = session?.referencePitches || [];
-  if (!points.length) {
-    return {
-      ready: false,
-      fromMs: Math.max(0, positionMs - 2400),
-      toMs: positionMs + 6500,
-      segments: [],
-    };
-  }
-
-  const fromMs = Math.max(0, positionMs - 2400);
-  const toMs = positionMs + 6500;
-  let index = Math.max(0, lowerBoundPitch(points, fromMs) - 3);
-  const prepared = [];
-
-  while (index < points.length) {
-    const point = points[index];
-    if (point.timeMs > toMs) break;
-
-    if (point.timeMs >= fromMs && point.confidence >= 0.26) {
-      const around = [];
-      for (let j = Math.max(0, index - 2); j <= Math.min(points.length - 1, index + 2); j += 1) {
-        const candidate = points[j];
-        if (Math.abs(candidate.timeMs - point.timeMs) <= 180 && candidate.confidence >= 0.22) {
-          const midi = hzToMidi(candidate.hz);
-          if (Number.isFinite(midi) && midi >= 30 && midi <= 96) around.push(midi);
-        }
-      }
-
-      const smoothMidi = median(around);
-      if (Number.isFinite(smoothMidi)) {
-        prepared.push({
-          timeMs: point.timeMs,
-          midi: Math.round(smoothMidi),
-          confidence: point.confidence,
-        });
-      }
-    }
-    index += 1;
-  }
-
-  const segments = [];
-  const STEP_MS = (ANALYSIS_STEP / ANALYSIS_RATE) * 1000;
-
-  for (const point of prepared) {
-    const last = segments.at(-1);
-    if (
-      last &&
-      last.midi === point.midi &&
-      point.timeMs - last.endMs <= 190
-    ) {
-      last.endMs = point.timeMs + STEP_MS * 0.72;
-      last.confidence = Math.max(last.confidence, point.confidence);
-    } else {
-      segments.push({
-        startMs: Math.max(fromMs, point.timeMs - STEP_MS * 0.35),
-        endMs: point.timeMs + STEP_MS * 0.72,
-        midi: point.midi,
-        note: noteNameFromMidi(point.midi),
-        confidence: point.confidence,
-      });
-    }
-  }
-
-  // Убираем совсем короткий шум и слегка склеиваем соседние куски одной ноты.
-  const cleaned = [];
-  for (const segment of segments) {
-    if (segment.endMs - segment.startMs < 90) continue;
-    const last = cleaned.at(-1);
-    if (
-      last &&
-      last.midi === segment.midi &&
-      segment.startMs - last.endMs <= 150
-    ) {
-      last.endMs = segment.endMs;
-      last.confidence = Math.max(last.confidence, segment.confidence);
-    } else {
-      cleaned.push({ ...segment });
-    }
+    const me = draft.participants.find(
+      (person) => person.id === userId && person.id !== draft.owner.id,
+    );
+    if (me?.status === "pending") myInvites.push(publicDraft(draft));
   }
 
   return {
-    ready: cleaned.length > 0,
-    fromMs,
-    toMs,
-    segments: cleaned.slice(-90),
+    current: publicCurrent(room.current),
+    queue: room.queue.map(publicQueueItem),
+    myInvites,
+    myDrafts,
   };
 }
 
-function publicSession(session) {
-  if (!session) {
-    return {
-      active: false,
-      status: "idle",
-      positionMs: 0,
-      track: null,
-      source: null,
-      score: null,
-    };
-  }
+export function getRoomState(guildId, userId) {
+  return publicRoom(roomFor(guildId), userId);
+}
 
+function singerFromMember(member) {
   return {
-    active: ["resolving", "countdown", "buffering", "playing", "paused"].includes(session.status),
-    status: session.status,
-    positionMs: currentPositionMs(session),
-    track: publicTrack(session.track),
-    source: session.source,
-    channelId: session.channelId,
-    channelName: session.channelName,
-    countdownEndsAt: session.countdownEndsAt,
-    score: publicScore(session),
-    singerPitch: session.singerPitch,
-    noteGuide: publicPitchGuide(session, currentPositionMs(session)),
-    error: session.error,
-    updatedAt: session.updatedAt,
+    id: member.id,
+    name: userLabel(member),
   };
 }
 
-function estimatePitch(buffer, sampleRate = ANALYSIS_RATE) {
-  const count = Math.floor(buffer.length / 2);
-  if (count < 512) return null;
-
-  const samples = new Float64Array(count);
-  let mean = 0;
-  for (let i = 0; i < count; i += 1) {
-    const value = buffer.readInt16LE(i * 2) / 32768;
-    samples[i] = value;
-    mean += value;
-  }
-  mean /= count;
-
-  let energy = 0;
-  for (let i = 0; i < count; i += 1) {
-    samples[i] -= mean;
-    energy += samples[i] * samples[i];
-  }
-  const rms = Math.sqrt(energy / count);
-  if (rms < 0.012) return null;
-
-  const minLag = Math.max(2, Math.floor(sampleRate / 950));
-  const maxLag = Math.min(count - 2, Math.ceil(sampleRate / 70));
-  let bestLag = 0;
-  let bestCorr = -1;
-
-  for (let lag = minLag; lag <= maxLag; lag += 1) {
-    let xy = 0;
-    let xx = 0;
-    let yy = 0;
-    const limit = count - lag;
-    for (let i = 0; i < limit; i += 1) {
-      const a = samples[i];
-      const b = samples[i + lag];
-      xy += a * b;
-      xx += a * a;
-      yy += b * b;
-    }
-    const corr = xy / Math.sqrt(Math.max(1e-12, xx * yy));
-    if (corr > bestCorr) {
-      bestCorr = corr;
-      bestLag = lag;
-    }
-  }
-
-  if (!bestLag || bestCorr < 0.46) return null;
-
+function ownerFromUser(user) {
   return {
-    hz: sampleRate / bestLag,
-    confidence: Math.max(0, Math.min(1, (bestCorr - 0.42) / 0.58)),
-    rms,
+    id: user.id,
+    name: user.global_name || user.username || "Discord",
   };
 }
 
-class PitchWindowTracker {
-  constructor(onPitch) {
-    this.onPitch = onPitch;
-    this.pending = Buffer.alloc(0);
-    this.sampleCursor = 0;
-  }
-
-  push(chunk) {
-    if (!chunk?.length) return;
-    this.pending = this.pending.length
-      ? Buffer.concat([this.pending, chunk])
-      : Buffer.from(chunk);
-
-    const windowBytes = ANALYSIS_WINDOW * 2;
-    const stepBytes = ANALYSIS_STEP * 2;
-
-    while (this.pending.length >= windowBytes) {
-      const window = this.pending.subarray(0, windowBytes);
-      const pitch = estimatePitch(window);
-      const timeMs = ((this.sampleCursor + ANALYSIS_WINDOW / 2) / ANALYSIS_RATE) * 1000;
-      if (pitch) this.onPitch(pitch, timeMs);
-      this.pending = this.pending.subarray(stepBytes);
-      this.sampleCursor += ANALYSIS_STEP;
-    }
+function ensureQueueSlot(room, ownerId) {
+  if (room.queue.some((item) => item.owner.id === ownerId)) {
+    throw new Error("USER_QUEUE_LIMIT");
   }
 }
 
-function downsampleDiscordPcm(chunk) {
-  // Discord decoder: 48 kHz stereo signed 16-bit. Берём каждую третью stereo frame -> 16 kHz mono.
-  const frames = Math.floor(chunk.length / 4);
-  const outFrames = Math.floor(frames / 3);
-  const out = Buffer.allocUnsafe(outFrames * 2);
-  let outIndex = 0;
+async function startItem(room, item) {
+  const { guild, channel } = await guildAndVoiceMember(room.guildId, item.owner.id);
 
-  for (let frame = 0; frame + 2 < frames; frame += 3) {
-    const byte = frame * 4;
-    const left = chunk.readInt16LE(byte);
-    const right = chunk.readInt16LE(byte + 2);
-    out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round((left + right) / 2))), outIndex * 2);
-    outIndex += 1;
+  const channelMembers = new Set(
+    [...channel.members.values()].filter((member) => !member.user.bot).map((member) => member.id),
+  );
+
+  const singers = item.singers
+    .filter((singer) => channelMembers.has(singer.id))
+    .slice(0, 4);
+
+  if (!singers.some((singer) => singer.id === item.owner.id)) {
+    singers.unshift(item.owner);
   }
 
-  return out.subarray(0, outIndex * 2);
-}
-
-function pitchClassCents(aHz, bHz) {
-  if (!(aHz > 0) || !(bHz > 0)) return 600;
-  const raw = Math.abs(1200 * Math.log2(aHz / bHz));
-  const mod = raw % 1200;
-  return Math.min(mod, 1200 - mod);
-}
-
-function findReferenceMatches(points, positionMs, userHz) {
-  if (!points.length) return null;
-  const radius = 320;
-  let best = null;
-
-  // referencePitches отсортирован по времени. С конца обычно быстрее, т.к. playback идёт вперёд.
-  for (let i = points.length - 1; i >= 0; i -= 1) {
-    const point = points[i];
-    const offset = point.timeMs - positionMs;
-    if (offset < -radius) break;
-    if (offset > radius) continue;
-
-    const cents = pitchClassCents(userHz, point.hz);
-    const candidate = { ...point, cents, offsetMs: offset };
-    if (
-      !best ||
-      candidate.cents < best.cents - 4 ||
-      (Math.abs(candidate.cents - best.cents) <= 4 && Math.abs(candidate.offsetMs) < Math.abs(best.offsetMs))
-    ) {
-      best = candidate;
-    }
-  }
-
-  return best;
-}
-
-function pitchPoints(cents) {
-  if (cents <= 35) return { value: 100, verdict: "PERFECT" };
-  if (cents <= 80) return { value: 91, verdict: "GREAT" };
-  if (cents <= 150) return { value: 74, verdict: "GOOD" };
-  if (cents <= 240) return { value: 42, verdict: "MISS" };
-  return { value: 0, verdict: "MISS" };
-}
-
-function timingPoints(offsetMs) {
-  const diff = Math.abs(offsetMs);
-  if (diff <= 60) return 100;
-  if (diff <= 120) return 88;
-  if (diff <= 200) return 68;
-  if (diff <= 260) return 46;
-  return 25;
-}
-
-function addSingerPitch(session, pitch) {
-  if (session.status !== "playing") return;
-
-  const positionMs = currentPositionMs(session);
-  session.singerPitchSeq += 1;
-  session.singerPitch = {
-    seq: session.singerPitchSeq,
-    positionMs: Math.round(positionMs),
-    hz: Math.round(pitch.hz * 10) / 10,
-    midi: Math.round(hzToMidi(pitch.hz) * 100) / 100,
-    note: noteNameFromMidi(hzToMidi(pitch.hz)),
-    confidence: Math.round(pitch.confidence * 100),
-  };
-
-  const match = findReferenceMatches(session.referencePitches, positionMs, pitch.hz);
-  if (!match) return;
-
-  const scored = pitchPoints(match.cents);
-  const timing = timingPoints(match.offsetMs);
-  const score = session.score;
-
-  score.compared += 1;
-  score.pitchSum += scored.value;
-  score.timingSum += timing;
-  score.confidenceSum += pitch.confidence * 100;
-
-  const key = scored.verdict.toLowerCase();
-  score[key] += 1;
-
-  if (scored.verdict === "MISS") {
-    score.combo = 0;
-  } else {
-    score.combo += 1;
-    score.maxCombo = Math.max(score.maxCombo, score.combo);
-  }
-
-  score.live = {
-    verdict: scored.verdict,
-    cents: Math.round(match.cents),
-    combo: score.combo,
-    accuracy: Math.round(score.pitchSum / score.compared),
-    userHz: Math.round(pitch.hz * 10) / 10,
-    userMidi: Math.round(hzToMidi(pitch.hz) * 100) / 100,
-    targetHz: Math.round(match.hz * 10) / 10,
-    targetMidi: Math.round(hzToMidi(match.hz) * 100) / 100,
-    targetNote: noteNameFromMidi(hzToMidi(match.hz)),
-    positionMs: Math.round(positionMs),
-  };
-}
-
-function beginReferenceAnalysis(session, stream) {
-  session.referencePitches = [];
-  session.referenceStream = stream || null;
-  if (!stream) return;
-
-  const tracker = new PitchWindowTracker((pitch, timeMs) => {
-    if (pitch.confidence < 0.22) return;
-    session.referencePitches.push({
-      timeMs,
-      hz: pitch.hz,
-      confidence: pitch.confidence,
-    });
-  });
-
-  stream.on("data", (chunk) => tracker.push(chunk));
-  stream.on("error", (error) => {
-    console.warn(`[SCORE ${session.guildId}] reference stream:`, error?.message || error);
-  });
-}
-
-function startSingerCapture(session, connection, userId) {
-  stopSingerCapture(session);
-
-  try {
-    const opusStream = connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.Manual },
-    });
-    const decoder = new prism.opus.Decoder({
-      rate: 48000,
-      channels: 2,
-      frameSize: 960,
-    });
-    const tracker = new PitchWindowTracker((pitch) => addSingerPitch(session, pitch));
-
-    opusStream.pipe(decoder);
-    decoder.on("data", (chunk) => tracker.push(downsampleDiscordPcm(chunk)));
-    decoder.on("error", (error) => {
-      console.warn(`[SCORE ${session.guildId}] decoder:`, error?.message || error);
-    });
-    opusStream.on("error", (error) => {
-      console.warn(`[SCORE ${session.guildId}] receive:`, error?.message || error);
-    });
-
-    session.capture = { opusStream, decoder };
-    console.log(`[SCORE ${session.guildId}] Слушаем певца ${userId}`);
-  } catch (error) {
-    console.warn(`[SCORE ${session.guildId}] Не удалось включить оценку:`, error);
-    session.capture = null;
-  }
-}
-
-function stopSingerCapture(session) {
-  const capture = session?.capture;
-  if (!capture) return;
-  session.capture = null;
-  try { capture.opusStream?.destroy?.(); } catch {}
-  try { capture.decoder?.destroy?.(); } catch {}
-}
-
-function stopReferenceAnalysis(session) {
-  try { session?.referenceStream?.destroy?.(); } catch {}
-  if (session) session.referenceStream = null;
-}
-
-function gradeForScore(total) {
-  if (total >= 95) return "S+";
-  if (total >= 90) return "S";
-  if (total >= 82) return "A";
-  if (total >= 72) return "B";
-  if (total >= 60) return "C";
-  return "D";
-}
-
-function finalizeScore(session) {
-  const score = session.score;
-  if (!score || score.finalized) return score?.result || null;
-  score.finalized = true;
-
-  const compared = score.compared;
-  if (compared < 8) {
-    score.result = {
-      available: false,
-      reason: "TOO_LITTLE_VOICE",
-      compared,
-      total: 0,
-      grade: "—",
-    };
-    return score.result;
-  }
-
-  const pitch = score.pitchSum / compared;
-  const timing = score.timingSum / compared;
-  const stability = score.confidenceSum / compared;
-
-  const elapsedMs = Math.max(1, currentPositionMs(session));
-  const voicedMs = compared * (ANALYSIS_STEP / ANALYSIS_RATE) * 1000;
-  const expectedVoicedMs = Math.max(10_000, elapsedMs * 0.24);
-  const participation = Math.max(0, Math.min(1, voicedMs / expectedVoicedMs));
-
-  const raw = pitch * 0.7 + timing * 0.2 + stability * 0.1;
-  const total = Math.round(Math.max(0, Math.min(100, raw * (0.2 + participation * 0.8))));
-
-  score.result = {
-    available: true,
-    beta: true,
-    total,
-    points: total * 1000,
-    grade: gradeForScore(total),
-    pitch: Math.round(pitch),
-    timing: Math.round(timing),
-    stability: Math.round(stability),
-    participation: Math.round(participation * 100),
-    compared,
-    perfect: score.perfect,
-    great: score.great,
-    good: score.good,
-    miss: score.miss,
-    maxCombo: score.maxCombo,
-  };
-
-  console.log(`[SCORE ${session.guildId}] ${score.result.points} / ${score.result.grade}`, score.result);
-  return score.result;
-}
-
-function clearCountdown(session) {
-  if (session.countdownTimer) clearTimeout(session.countdownTimer);
-  session.countdownTimer = null;
-  session.countdownEndsAt = null;
-}
-
-function resetSessionForTrack(session, track, joined, userId) {
-  clearCountdown(session);
-  stopSingerCapture(session);
-  stopReferenceAnalysis(session);
-  session.player.stop(true);
-  session.resource?.playStream?.destroy?.();
-
-  session.resource = null;
-  session.track = publicTrack(track);
-  session.source = null;
-  session.channelId = joined.channelId;
-  session.channelName = joined.channelName;
-  session.singerId = userId;
-  session.status = "resolving";
-  session.error = null;
-  session.lastPositionMs = 0;
-  session.referencePitches = [];
-  session.singerPitch = null;
-  session.singerPitchSeq = 0;
-  session.score = freshScore();
-  session.generation += 1;
-  session.updatedAt = Date.now();
-}
-
-export async function startKaraoke(guildId, userId, track) {
-  const joined = await joinUsersVoiceChannel(guildId, userId);
-  const connection = getVoiceConnection(guildId);
+  const connected = await joinUsersVoiceChannel(room.guildId, item.owner.id);
+  const connection = getVoiceConnection(guild.id);
   if (!connection) throw new Error("VOICE_CONNECTION_FAILED");
 
-  const session = ensureSession(guildId);
-  resetSessionForTrack(session, track, joined, userId);
-  const generation = session.generation;
+  const current = {
+    id: item.id,
+    track: item.track,
+    owner: item.owner,
+    singers,
+    lyricPlan: buildLyricPlan(item.track, singers),
+    resource: null,
+    source: null,
+    status: "resolving",
+    channelId: connected.channelId,
+    channelName: connected.channelName,
+    countdownEndsAt: null,
+    countdownTimer: null,
+    error: null,
+    updatedAt: Date.now(),
+    lastPositionMs: 0,
+  };
+
+  room.current = current;
+
+  console.log(
+    `[KARAOKE ${room.guildId}] Ищем аудио: ${item.track.artist} — ${item.track.title}`,
+  );
 
   try {
-    console.log(`[KARAOKE ${guildId}] Ищем аудио: ${track.artist} — ${track.title}`);
-    const audio = await resolveAudio(track);
+    const audio = await resolveAudio(item.track);
 
-    if (session.generation !== generation) throw new Error("KARAOKE_REPLACED");
+    if (room.current?.id !== current.id) return;
 
-    session.source = audio.source;
-    beginReferenceAnalysis(session, audio.referencePcm);
-
-    const resource = createAudioResource(audio.stream, {
+    current.source = audio.source;
+    current.resource = createAudioResource(audio.stream, {
       inputType: audio.inputType,
-      metadata: {
-        guildId,
-        track: session.track,
-        source: audio.source,
-      },
     });
+    current.status = "countdown";
+    current.countdownEndsAt = Date.now() + COUNTDOWN_MS;
+    current.updatedAt = Date.now();
 
-    session.resource = resource;
-    connection.subscribe(session.player);
+    connection.subscribe(room.player);
 
-    session.status = "countdown";
-    session.countdownEndsAt = Date.now() + COUNTDOWN_MS;
-    session.updatedAt = Date.now();
-
-    session.countdownTimer = setTimeout(() => {
-      session.countdownTimer = null;
-      if (session.generation !== generation || session.status !== "countdown") return;
-
-      session.status = "buffering";
-      session.countdownEndsAt = null;
-      session.updatedAt = Date.now();
-      startSingerCapture(session, connection, userId);
-      session.player.play(resource);
-      console.log(`[KARAOKE ${guildId}] ▶ ${audio.source.title} (${audio.source.videoId})`);
+    current.countdownTimer = setTimeout(() => {
+      if (room.current?.id !== current.id) return;
+      current.countdownTimer = null;
+      current.countdownEndsAt = null;
+      room.player.play(current.resource);
     }, COUNTDOWN_MS);
 
-    return publicSession(session);
+    console.log(
+      `[KARAOKE ${room.guildId}] ▶ ${audio.source.title} | владелец ${item.owner.name} | певцов ${singers.length}`,
+    );
   } catch (error) {
-    clearCountdown(session);
-    stopSingerCapture(session);
-    stopReferenceAnalysis(session);
-    session.player.stop(true);
-    session.resource?.playStream?.destroy?.();
-    session.status = "error";
-    session.error = error?.message || "KARAOKE_START_FAILED";
-    session.updatedAt = Date.now();
-    console.error(`[KARAOKE ${guildId}] Не удалось запустить:`, error);
-    throw error;
+    console.error(`[KARAOKE ${room.guildId}] Не удалось запустить:`, error);
+    current.status = "error";
+    current.error = error?.message || "AUDIO_STREAM_FAILED";
+    current.updatedAt = Date.now();
+
+    const currentId = current.id;
+    setTimeout(() => {
+      if (room.current?.id !== currentId) return;
+      room.current = null;
+      void advanceQueue(room);
+    }, 1000);
   }
 }
 
-export function getKaraokeState(guildId) {
-  return publicSession(karaokeSessions.get(guildId));
+async function advanceQueue(room) {
+  if (room.advancing || room.current) return;
+  room.advancing = true;
+
+  try {
+    while (!room.current && room.queue.length) {
+      const next = room.queue.shift();
+
+      try {
+        await guildAndVoiceMember(room.guildId, next.owner.id);
+      } catch (error) {
+        console.log(
+          `[QUEUE ${room.guildId}] Удалена песня ${next.owner.name}: владелец вышел из voice`,
+        );
+        continue;
+      }
+
+      try {
+        await startItem(room, next);
+      } catch (error) {
+        console.error(`[QUEUE ${room.guildId}] Не удалось запустить следующий трек:`, error);
+      }
+    }
+  } finally {
+    room.advancing = false;
+  }
 }
 
-export function pauseKaraoke(guildId) {
-  const session = karaokeSessions.get(guildId);
-  if (!session) throw new Error("KARAOKE_NOT_ACTIVE");
-  if (session.status !== "playing") return publicSession(session);
-  currentPositionMs(session);
-  session.player.pause(true);
-  session.status = "paused";
-  session.updatedAt = Date.now();
-  return publicSession(session);
+async function addItem(room, item) {
+  if (!room.current && room.queue.length === 0) {
+    await startItem(room, item);
+    return { started: true };
+  }
+
+  ensureQueueSlot(room, item.owner.id);
+  room.queue.push(item);
+  return { started: false, queuePosition: room.queue.length };
 }
 
-export function resumeKaraoke(guildId) {
-  const session = karaokeSessions.get(guildId);
-  if (!session) throw new Error("KARAOKE_NOT_ACTIVE");
-  if (session.status !== "paused") return publicSession(session);
-  session.player.unpause();
-  session.status = "playing";
-  session.updatedAt = Date.now();
-  return publicSession(session);
+export async function addSoloSong(guildId, user, track) {
+  await guildAndVoiceMember(guildId, user.id);
+  const room = roomFor(guildId);
+  const owner = ownerFromUser(user);
+
+  const item = {
+    id: randomUUID(),
+    owner,
+    singers: [owner],
+    track,
+    createdAt: Date.now(),
+  };
+
+  const result = await addItem(room, item);
+  return { ...result, room: publicRoom(room, user.id) };
 }
 
-export function stopKaraoke(guildId) {
-  const session = karaokeSessions.get(guildId);
-  if (!session) return publicSession(null);
+export async function createDuetDraft(guildId, user, track, inviteeIds) {
+  const { channel } = await guildAndVoiceMember(guildId, user.id);
+  const room = roomFor(guildId);
 
-  currentPositionMs(session);
-  clearCountdown(session);
-  if (["playing", "paused", "buffering"].includes(session.status)) finalizeScore(session);
-  session.status = "stopped";
-  stopSingerCapture(session);
-  stopReferenceAnalysis(session);
-  session.player.stop(true);
-  session.resource?.playStream?.destroy?.();
-  session.resource = null;
-  session.updatedAt = Date.now();
-  return publicSession(session);
+  if ([...room.drafts.values()].some((draft) => draft.owner.id === user.id)) {
+    throw new Error("DUET_DRAFT_EXISTS");
+  }
+
+  const unique = [...new Set((inviteeIds || []).map(String))]
+    .filter((id) => id && id !== user.id)
+    .slice(0, 3);
+
+  if (!unique.length) throw new Error("DUET_INVITE_REQUIRED");
+
+  const members = new Map(
+    [...channel.members.values()]
+      .filter((member) => !member.user.bot)
+      .map((member) => [member.id, member]),
+  );
+
+  for (const id of unique) {
+    if (!members.has(id)) throw new Error("INVITEE_NOT_IN_VOICE");
+  }
+
+  const owner = ownerFromUser(user);
+  const participants = [
+    { ...owner, status: "accepted" },
+    ...unique.map((id) => ({
+      ...singerFromMember(members.get(id)),
+      status: "pending",
+    })),
+  ];
+
+  const draft = {
+    id: randomUUID(),
+    owner,
+    track,
+    participants,
+    createdAt: Date.now(),
+  };
+
+  room.drafts.set(draft.id, draft);
+  return publicDraft(draft);
 }
 
-export function leaveVoiceChannel(guildId) {
-  stopKaraoke(guildId);
+export function respondDuetDraft(guildId, userId, draftId, accept) {
+  const room = roomFor(guildId);
+  const draft = room.drafts.get(draftId);
+  if (!draft) throw new Error("DUET_DRAFT_NOT_FOUND");
+
+  const participant = draft.participants.find(
+    (person) => person.id === userId && person.id !== draft.owner.id,
+  );
+  if (!participant) throw new Error("DUET_NOT_INVITED");
+
+  participant.status = accept ? "accepted" : "declined";
+  return publicDraft(draft);
+}
+
+export async function commitDuetDraft(guildId, userId, draftId) {
+  const room = roomFor(guildId);
+  const draft = room.drafts.get(draftId);
+  if (!draft) throw new Error("DUET_DRAFT_NOT_FOUND");
+  if (draft.owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+
+  const accepted = draft.participants
+    .filter((person) => person.status === "accepted")
+    .slice(0, 4)
+    .map(({ id, name }) => ({ id, name }));
+
+  if (accepted.length < 2) throw new Error("DUET_NEEDS_ACCEPTED");
+
+  room.drafts.delete(draftId);
+
+  const item = {
+    id: randomUUID(),
+    owner: draft.owner,
+    singers: accepted,
+    track: draft.track,
+    createdAt: Date.now(),
+  };
+
+  const result = await addItem(room, item);
+  return { ...result, room: publicRoom(room, userId) };
+}
+
+export function cancelDuetDraft(guildId, userId, draftId) {
+  const room = roomFor(guildId);
+  const draft = room.drafts.get(draftId);
+  if (!draft) return false;
+  if (draft.owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+  room.drafts.delete(draftId);
+  return true;
+}
+
+export function removeQueuedSong(guildId, userId, queueId) {
+  const room = roomFor(guildId);
+  const index = room.queue.findIndex((item) => item.id === queueId);
+  if (index < 0) throw new Error("QUEUE_ITEM_NOT_FOUND");
+  if (room.queue[index].owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+
+  room.queue.splice(index, 1);
+  return publicRoom(room, userId);
+}
+
+export function pauseKaraoke(guildId, userId) {
+  const room = roomFor(guildId);
+  const current = room.current;
+  if (!current) throw new Error("KARAOKE_NOT_ACTIVE");
+  if (current.owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+  if (current.status !== "playing") throw new Error("KARAOKE_NOT_PLAYING");
+
+  current.lastPositionMs = currentPositionMs(current);
+  room.player.pause(true);
+  return publicCurrent(current);
+}
+
+export function resumeKaraoke(guildId, userId) {
+  const room = roomFor(guildId);
+  const current = room.current;
+  if (!current) throw new Error("KARAOKE_NOT_ACTIVE");
+  if (current.owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+  if (current.status !== "paused") throw new Error("KARAOKE_NOT_PAUSED");
+
+  room.player.unpause();
+  return publicCurrent(current);
+}
+
+export function stopKaraoke(guildId, userId) {
+  const room = roomFor(guildId);
+  const current = room.current;
+  if (!current) throw new Error("KARAOKE_NOT_ACTIVE");
+  if (current.owner.id !== userId) throw new Error("NOT_SONG_OWNER");
+
+  if (current.countdownTimer) clearTimeout(current.countdownTimer);
+  current.lastPositionMs = currentPositionMs(current);
+  current.status = "stopped";
+  current.updatedAt = Date.now();
+
+  room.current = null;
+  room.player.stop(true);
+  setTimeout(() => void advanceQueue(room), 100);
+  return { stopped: true };
+}
+
+export function leaveVoiceChannel(guildId, userId) {
+  const room = roomFor(guildId);
+  if (room.current && room.current.owner.id !== userId) {
+    throw new Error("NOT_SONG_OWNER");
+  }
+
+  if (room.current?.countdownTimer) clearTimeout(room.current.countdownTimer);
+  room.current = null;
+  room.player.stop(true);
+
   const connection = getVoiceConnection(guildId);
   if (!connection) return false;
   connection.destroy();
   return true;
 }
+
+bot.on("voiceStateUpdate", (oldState, newState) => {
+  const userId = oldState.id;
+  const oldChannelId = oldState.channelId;
+  const newChannelId = newState.channelId;
+
+  if (!oldChannelId || oldChannelId === newChannelId) return;
+
+  const room = rooms.get(oldState.guild.id);
+  if (!room) return;
+
+  const before = room.queue.length;
+  room.queue = room.queue.filter((item) => item.owner.id !== userId);
+  if (room.queue.length !== before) {
+    console.log(`[QUEUE ${oldState.guild.id}] Песня пользователя ${userId} удалена: он вышел из voice`);
+  }
+
+  for (const [draftId, draft] of room.drafts) {
+    if (draft.owner.id === userId) {
+      room.drafts.delete(draftId);
+      continue;
+    }
+    const participant = draft.participants.find((person) => person.id === userId);
+    if (participant && participant.status !== "declined") participant.status = "left";
+  }
+
+  const current = room.current;
+  if (!current || current.channelId !== oldChannelId) return;
+
+  if (current.owner.id === userId) {
+    console.log(`[KARAOKE ${oldState.guild.id}] Владелец вышел из voice — песня остановлена`);
+    if (current.countdownTimer) clearTimeout(current.countdownTimer);
+    room.current = null;
+    room.player.stop(true);
+    setTimeout(() => void advanceQueue(room), 100);
+    return;
+  }
+
+  if (current.singers.some((singer) => singer.id === userId)) {
+    current.singers = current.singers.filter((singer) => singer.id !== userId);
+    current.lyricPlan = buildLyricPlan(current.track, current.singers);
+    current.updatedAt = Date.now();
+  }
+});
