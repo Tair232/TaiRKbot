@@ -1,6 +1,6 @@
 {
   "name": "discord-russian-karaoke",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Russian karaoke Discord Activity + voice bot for Bothost",
@@ -11,14 +11,15 @@
     "build": "vite build",
     "start": "node server.js",
     "dev": "vite --host 0.0.0.0",
-    "check": "node --check server.js && node --check bot.js && node --check main.js"
+    "check": "node --check server.js && node --check bot.js && node --check audio-provider.js && node --check main.js"
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.5.0",
-    "@discordjs/voice": "^0.19.2",
+    "@discordjs/voice": "0.19.2",
     "discord.js": "^14.22.1",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
-    "vite": "^7.1.1"
+    "vite": "^7.1.1",
+    "youtubei.js": "17.2.0"
   }
 }
