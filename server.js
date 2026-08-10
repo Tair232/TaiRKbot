@@ -85,7 +85,14 @@ async function discordUserFromRequest(req) {
 
 function authStatus(code) {
   if (["AUTH_REQUIRED", "AUTH_INVALID"].includes(code)) return 401;
-  if (["NOT_SONG_OWNER", "DUET_NOT_INVITED"].includes(code)) return 403;
+  if (
+    [
+      "NOT_SONG_OWNER",
+      "DUET_NOT_INVITED",
+      "GUILD_NOT_ALLOWED",
+      "VOICE_NOT_ALLOWED",
+    ].includes(code)
+  ) return 403;
   return 400;
 }
 
