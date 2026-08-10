@@ -446,3 +446,35 @@ img { display: block; max-width: 100%; }
   .owner-controls { width:100%; }
   .owner-controls button { flex:1; }
 }
+
+
+/* 0.5.1 fixes */
+.modal-loading {
+  min-height: 170px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.duet-empty-state {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+}
+.duet-empty-state > div {
+  font-size: 30px;
+}
+.duet-empty-state strong {
+  color: #c4c5cc;
+  font-size: 12px;
+}
+.duet-empty-state span {
+  max-width: 380px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
